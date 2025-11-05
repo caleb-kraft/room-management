@@ -4,14 +4,17 @@
 
 This document provides a comprehensive guide to accessing reservation occurrences, locations, details, and resource details through the Room Management API.
 
+**⚠️ Important for Caching**: When using `GetReservationOccurrences`, the response includes location and resource IDs but not the full objects. See the [Caching Strategies](#caching-strategies-getting-full-data) section for solutions on how to efficiently fetch and cache complete data.
+
 ## Table of Contents
 
 1. [Reservation Occurrences API](#reservation-occurrences-api)
 2. [Reservation Details API](#reservation-details-api)
 3. [Reservation Location Details](#reservation-location-details)
 4. [Reservation Resource Details](#reservation-resource-details)
-5. [Data Models](#data-models)
-6. [Examples](#examples)
+5. [Caching Strategies: Getting Full Data](#caching-strategies-getting-full-data)
+6. [Data Models](#data-models)
+7. [Examples](#examples)
 
 ---
 
@@ -68,9 +71,13 @@ Each occurrence in the response is a `ReservationSummary` object with the follow
 
 #### Location and Resource Collections
 - `ReservationLocations` (List<ReservationLocation>): List of locations for this occurrence
+  - **Note**: By default, only contains `LocationId` and `LocationLayoutId`. The full `Location` and `LocationLayout` objects may not be populated unless you use one of the strategies in the [Caching Strategies](#caching-strategies-getting-full-data) section.
 - `ReservationResources` (List<ReservationResource>): List of all resources for this occurrence
+  - **Note**: By default, only contains `ResourceId`. The full `Resource` object may not be populated unless you use one of the strategies in the [Caching Strategies](#caching-strategies-getting-full-data) section.
 - `UnassignedReservationResources` (List<ReservationResource>): Resources not assigned to a specific location
 - `ReservationDoorLockTimes` (List<ReservationDoorLockTime>): Door lock schedule times
+
+**⚠️ Important**: When using `GetReservationOccurrences`, the `ReservationLocations` and `ReservationResources` collections typically only contain IDs (`LocationId`, `ResourceId`, `LocationLayoutId`), not the full navigation objects. See the [Caching Strategies](#caching-strategies-getting-full-data) section for solutions.
 
 #### Contact Information
 - `EventContactPersonAlias` (PersonAlias): Person alias for event contact
@@ -296,6 +303,306 @@ allResources.forEach(resource => {
 #### Accessing Resource Details via Standard API
 
 **GET** `/api/ReservationResources/{id}?$expand=Resource($expand=Category,Campus,Location),ReservationLocation($expand=Location)`
+
+---
+
+## Caching Strategies: Getting Full Data
+
+### Problem
+
+When calling `GetReservationOccurrences`, the response includes `ReservationLocations` and `ReservationResources`, but these objects typically only contain IDs (`LocationId`, `ResourceId`, `LocationLayoutId`). The full `Location`, `Resource`, and `LocationLayout` objects are not automatically populated, which makes caching difficult.
+
+### Solution Options
+
+#### Option 1: Try OData $expand (May Work)
+
+Since `GetReservationOccurrences` returns `IQueryable<ReservationSummary>`, you can try using OData `$expand` to include navigation properties:
+
+```javascript
+// Attempt to expand nested objects (may or may not work depending on Rock's OData implementation)
+const url = `/api/Reservations/GetReservationOccurrences?startDateTime=2024-01-01&endDateTime=2024-12-31&$expand=ReservationLocations($expand=Location,LocationLayout),ReservationResources($expand=Resource)`;
+
+const response = await fetch(url);
+const occurrences = await response.json();
+```
+
+**Note**: This may not work because `ReservationSummary` is a DTO, not an entity. If it doesn't work, use Option 2 or 3.
+
+#### Option 2: Bulk Fetch Locations and Resources (Recommended for Caching)
+
+This is the most efficient approach for building a cache:
+
+**Step 1**: Get all reservation occurrences (with IDs only)
+
+```javascript
+const occurrences = await fetch(
+  `/api/Reservations/GetReservationOccurrences?startDateTime=${startDate}&endDateTime=${endDate}&includeAttributes=true`
+).then(r => r.json());
+```
+
+**Step 2**: Extract all unique IDs
+
+```javascript
+// Collect all unique location IDs, resource IDs, and layout IDs
+const locationIds = new Set();
+const resourceIds = new Set();
+const layoutIds = new Set();
+
+occurrences.forEach(occurrence => {
+  occurrence.ReservationLocations.forEach(rl => {
+    locationIds.add(rl.LocationId);
+    if (rl.LocationLayoutId) layoutIds.add(rl.LocationLayoutId);
+  });
+  
+  occurrence.ReservationResources.forEach(rr => {
+    resourceIds.add(rr.ResourceId);
+  });
+});
+```
+
+**Step 3**: Bulk fetch all locations
+
+```javascript
+// Fetch all locations at once
+const locationIdsArray = Array.from(locationIds);
+const locationsResponse = await fetch(
+  `/api/Locations?$filter=Id in (${locationIdsArray.join(',')})&$select=Id,Name,Street1,Street2,City,State,PostalCode,CampusId`
+);
+const locations = await locationsResponse.json();
+
+// Create a lookup map
+const locationsMap = new Map();
+locations.value.forEach(loc => locationsMap.set(loc.Id, loc));
+```
+
+**Step 4**: Bulk fetch all resources
+
+```javascript
+// Fetch all resources at once
+// Note: The exact endpoint path may vary. Try these in order:
+// Option 1: /api/Resources (if namespace routing is configured)
+// Option 2: /api/com_bemaservices/RoomManagement/Resources
+const resourceIdsArray = Array.from(resourceIds);
+const resourcesResponse = await fetch(
+  `/api/Resources?$filter=Id in (${resourceIdsArray.join(',')})&$expand=Category,Campus,Location`
+);
+const resources = await resourcesResponse.json();
+
+// Create a lookup map
+const resourcesMap = new Map();
+resources.value.forEach(res => resourcesMap.set(res.Id, res));
+```
+
+**Step 5**: Bulk fetch all location layouts
+
+```javascript
+// Fetch all location layouts at once
+// Note: The exact endpoint path may vary. Try these in order:
+// Option 1: /api/LocationLayouts (if namespace routing is configured)
+// Option 2: /api/com_bemaservices/RoomManagement/LocationLayouts
+const layoutIdsArray = Array.from(layoutIds);
+if (layoutIdsArray.length > 0) {
+  const layoutsResponse = await fetch(
+    `/api/LocationLayouts?$filter=Id in (${layoutIdsArray.join(',')})`
+  );
+  const layouts = await layoutsResponse.json();
+  
+  // Create a lookup map
+  const layoutsMap = new Map();
+  layouts.value.forEach(layout => layoutsMap.set(layout.Id, layout));
+}
+```
+
+**Step 6**: Enrich the occurrences with full data
+
+```javascript
+// Enrich occurrences with full location and resource data
+const enrichedOccurrences = occurrences.map(occurrence => {
+  const enrichedLocations = occurrence.ReservationLocations.map(rl => ({
+    ...rl,
+    Location: locationsMap.get(rl.LocationId),
+    LocationLayout: rl.LocationLayoutId ? layoutsMap.get(rl.LocationLayoutId) : null
+  }));
+  
+  const enrichedResources = occurrence.ReservationResources.map(rr => ({
+    ...rr,
+    Resource: resourcesMap.get(rr.ResourceId)
+  }));
+  
+  return {
+    ...occurrence,
+    ReservationLocations: enrichedLocations,
+    ReservationResources: enrichedResources,
+    UnassignedReservationResources: occurrence.UnassignedReservationResources.map(rr => ({
+      ...rr,
+      Resource: resourcesMap.get(rr.ResourceId)
+    }))
+  };
+});
+
+// Now you have fully enriched data ready for caching
+```
+
+#### Option 3: Use Standard Reservations API with $expand (Alternative)
+
+Instead of `GetReservationOccurrences`, you can query reservations directly and expand all relationships:
+
+```javascript
+// Get reservations with full expansion
+const reservationsResponse = await fetch(
+  `/api/Reservations?$filter=FirstOccurrenceStartDateTime le ${endDate} and LastOccurrenceEndDateTime ge ${startDate}` +
+  `&$expand=ReservationLocations($expand=Location,LocationLayout),ReservationResources($expand=Resource($expand=Category,Campus,Location)),ReservationType,ReservationMinistry`
+);
+const reservations = await reservationsResponse.json();
+
+// Then manually expand occurrences using the schedule
+// This requires parsing the schedule's iCalendar content to get occurrences
+```
+
+**Note**: This approach requires you to manually calculate occurrences from the schedule, which is more complex.
+
+#### Option 4: Combined Approach (Best for Production Caching)
+
+For a production caching system, combine approaches:
+
+```javascript
+async function buildReservationCache(startDate, endDate) {
+  // 1. Get all occurrences with IDs
+  const occurrences = await fetch(
+    `/api/Reservations/GetReservationOccurrences?startDateTime=${startDate}&endDateTime=${endDate}&includeAttributes=true`
+  ).then(r => r.json());
+  
+  // 2. Extract unique IDs
+  const locationIds = [...new Set(occurrences.flatMap(o => o.ReservationLocations.map(rl => rl.LocationId)))];
+  const resourceIds = [...new Set(occurrences.flatMap(o => o.ReservationResources.map(rr => rr.ResourceId)))];
+  const layoutIds = [...new Set(occurrences.flatMap(o => 
+    o.ReservationLocations.map(rl => rl.LocationLayoutId).filter(id => id != null)
+  ))];
+  
+  // 3. Fetch all related data in parallel
+  // Note: Verify the exact endpoint paths for Resources and LocationLayouts in your Rock instance
+  // They may be /api/Resources or /api/com_bemaservices/RoomManagement/Resources
+  const [locations, resources, layouts] = await Promise.all([
+    fetch(`/api/Locations?$filter=Id in (${locationIds.join(',')})`).then(r => r.json()),
+    fetch(`/api/Resources?$filter=Id in (${resourceIds.join(',')})&$expand=Category,Campus,Location`).then(r => r.json()),
+    layoutIds.length > 0 
+      ? fetch(`/api/LocationLayouts?$filter=Id in (${layoutIds.join(',')})`).then(r => r.json())
+      : Promise.resolve({ value: [] })
+  ]);
+  
+  // 4. Create lookup maps
+  const locationsMap = new Map(locations.value.map(l => [l.Id, l]));
+  const resourcesMap = new Map(resources.value.map(r => [r.Id, r]));
+  const layoutsMap = new Map(layouts.value.map(l => [l.Id, l]));
+  
+  // 5. Enrich occurrences
+  return occurrences.map(occurrence => ({
+    ...occurrence,
+    ReservationLocations: occurrence.ReservationLocations.map(rl => ({
+      ...rl,
+      Location: locationsMap.get(rl.LocationId),
+      LocationLayout: rl.LocationLayoutId ? layoutsMap.get(rl.LocationLayoutId) : null
+    })),
+    ReservationResources: occurrence.ReservationResources.map(rr => ({
+      ...rr,
+      Resource: resourcesMap.get(rr.ResourceId)
+    })),
+    UnassignedReservationResources: occurrence.UnassignedReservationResources.map(rr => ({
+      ...rr,
+      Resource: resourcesMap.get(rr.ResourceId)
+    }))
+  }));
+}
+```
+
+### Complete Caching Example for Vercel
+
+Here's a complete example for a Vercel serverless function:
+
+```javascript
+// api/cache-reservations.js
+export default async function handler(req, res) {
+  const startDate = req.query.startDate || new Date().toISOString();
+  const endDate = req.query.endDate || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+  
+  try {
+    // Get occurrences
+    const occurrencesRes = await fetch(
+      `${process.env.ROCK_API_URL}/api/Reservations/GetReservationOccurrences?startDateTime=${startDate}&endDateTime=${endDate}&includeAttributes=true`,
+      {
+        headers: {
+          'Authorization-Token': process.env.ROCK_API_TOKEN
+        }
+      }
+    );
+    const occurrences = await occurrencesRes.json();
+    
+    // Extract IDs
+    const locationIds = [...new Set(occurrences.flatMap(o => o.ReservationLocations.map(rl => rl.LocationId)))];
+    const resourceIds = [...new Set(occurrences.flatMap(o => o.ReservationResources.map(rr => rr.ResourceId)))];
+    const layoutIds = [...new Set(occurrences.flatMap(o => 
+      o.ReservationLocations.map(rl => rl.LocationLayoutId).filter(id => id != null)
+    ))];
+    
+    // Fetch related data in parallel
+    const [locations, resources, layouts] = await Promise.all([
+      fetch(`${process.env.ROCK_API_URL}/api/Locations?$filter=Id in (${locationIds.join(',')})`, {
+        headers: { 'Authorization-Token': process.env.ROCK_API_TOKEN }
+      }).then(r => r.json()),
+      
+      // Note: Verify the exact endpoint path. May be /api/Resources or /api/com_bemaservices/RoomManagement/Resources
+      fetch(`${process.env.ROCK_API_URL}/api/Resources?$filter=Id in (${resourceIds.join(',')})&$expand=Category,Campus,Location`, {
+        headers: { 'Authorization-Token': process.env.ROCK_API_TOKEN }
+      }).then(r => r.json()),
+      
+      // Note: Verify the exact endpoint path. May be /api/LocationLayouts or /api/com_bemaservices/RoomManagement/LocationLayouts
+      layoutIds.length > 0 
+        ? fetch(`${process.env.ROCK_API_URL}/api/LocationLayouts?$filter=Id in (${layoutIds.join(',')})`, {
+            headers: { 'Authorization-Token': process.env.ROCK_API_TOKEN }
+          }).then(r => r.json())
+        : Promise.resolve({ value: [] })
+    ]);
+    
+    // Create maps
+    const locationsMap = new Map(locations.value.map(l => [l.Id, l]));
+    const resourcesMap = new Map(resources.value.map(r => [r.Id, r]));
+    const layoutsMap = new Map(layouts.value.map(l => [l.Id, l]));
+    
+    // Enrich and return
+    const enrichedOccurrences = occurrences.map(occurrence => ({
+      ...occurrence,
+      ReservationLocations: occurrence.ReservationLocations.map(rl => ({
+        ...rl,
+        Location: locationsMap.get(rl.LocationId),
+        LocationLayout: rl.LocationLayoutId ? layoutsMap.get(rl.LocationLayoutId) : null
+      })),
+      ReservationResources: occurrence.ReservationResources.map(rr => ({
+        ...rr,
+        Resource: resourcesMap.get(rr.ResourceId)
+      })),
+      UnassignedReservationResources: occurrence.UnassignedReservationResources.map(rr => ({
+        ...rr,
+        Resource: resourcesMap.get(rr.ResourceId)
+      }))
+    }));
+    
+    res.status(200).json(enrichedOccurrences);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+}
+```
+
+### Performance Tips
+
+1. **Batch Requests**: Use `$filter=Id in (...)` to fetch multiple entities in one request
+2. **Parallel Fetching**: Use `Promise.all()` to fetch locations, resources, and layouts simultaneously
+3. **Cache Strategically**: Cache the enriched data in Redis, Vercel KV, or your preferred cache
+4. **Incremental Updates**: Only refresh cache when reservations change (use `ModifiedDateTime` to detect changes)
+5. **Pagination**: If you have thousands of occurrences, consider paginating the initial fetch
+6. **Verify Endpoint Paths**: The exact API paths for Resources and LocationLayouts may vary by Rock configuration. Check your Rock instance's API documentation or test with:
+   - `/api/Resources` or `/api/com_bemaservices/RoomManagement/Resources`
+   - `/api/LocationLayouts` or `/api/com_bemaservices/RoomManagement/LocationLayouts`
 
 ---
 
