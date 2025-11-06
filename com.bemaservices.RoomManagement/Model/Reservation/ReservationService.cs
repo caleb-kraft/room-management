@@ -1469,6 +1469,151 @@ namespace com.bemaservices.RoomManagement.Model
             return newReservation;
         }
 
+        /// <summary>
+        /// Generates a URL for editing a single occurrence of a recurring reservation.
+        /// </summary>
+        /// <param name="reservationId">The reservation identifier.</param>
+        /// <param name="occurrenceDateTime">The date/time of the occurrence to edit.</param>
+        /// <param name="detailPageUrl">The base URL of the detail page (without query string).</param>
+        /// <returns>The URL with query parameters for editing a single occurrence.</returns>
+        public static string GetEditOccurrenceUrl( int reservationId, DateTime occurrenceDateTime, string detailPageUrl )
+        {
+            if ( string.IsNullOrWhiteSpace( detailPageUrl ) )
+            {
+                return string.Empty;
+            }
+
+            var url = detailPageUrl;
+            if ( !url.Contains( "?" ) )
+            {
+                url += "?";
+            }
+            else
+            {
+                url += "&";
+            }
+
+            url += $"ReservationId={reservationId}&OccurrenceDateTime={occurrenceDateTime:O}";
+            return url;
+        }
+
+        /// <summary>
+        /// Deletes a single occurrence of a recurring reservation by adding it as an exception date.
+        /// </summary>
+        /// <param name="reservation">The recurring reservation.</param>
+        /// <param name="occurrenceDateTime">The date/time of the occurrence to delete.</param>
+        /// <param name="rockContext">The rock context.</param>
+        /// <returns><c>true</c> if the occurrence was successfully deleted; otherwise, <c>false</c>.</returns>
+        public bool DeleteSingleOccurrence( Reservation reservation, DateTime occurrenceDateTime, RockContext rockContext = null )
+        {
+            if ( reservation == null )
+            {
+                throw new ArgumentNullException( nameof( reservation ) );
+            }
+
+            rockContext = rockContext ?? new RockContext();
+
+            // Verify the occurrence exists
+            var occurrences = reservation.GetReservationTimes( occurrenceDateTime.Date, occurrenceDateTime.Date.AddDays( 1 ) );
+            var targetOccurrence = occurrences.FirstOrDefault( o => 
+                o.StartDateTime.Date == occurrenceDateTime.Date &&
+                Math.Abs( ( o.StartDateTime - occurrenceDateTime ).TotalMinutes ) < 60 );
+
+            if ( targetOccurrence == null )
+            {
+                return false;
+            }
+
+            var schedule = reservation.Schedule;
+            if ( schedule == null || string.IsNullOrWhiteSpace( schedule.iCalendarContent ) )
+            {
+                return false;
+            }
+
+            var calendarEvent = InetCalendarHelper.CreateCalendarEvent( schedule.iCalendarContent );
+            if ( calendarEvent == null )
+            {
+                return false;
+            }
+
+            // Check if this is a recurring event
+            var isRecurring = ( calendarEvent.RecurrenceRules?.Any() == true ) || ( calendarEvent.RecurrenceDates?.Any() == true );
+            if ( !isRecurring )
+            {
+                // Not recurring, so delete the whole reservation
+                return false;
+            }
+
+            // Add EXDATE to exclude this occurrence
+            var occurrenceDate = occurrenceDateTime.Date;
+            var occurrenceTime = occurrenceDateTime.TimeOfDay;
+            var isAllDay = calendarEvent.IsAllDay;
+            var eventTimeZoneId = calendarEvent.DtStart?.TzId ?? TZConvert.WindowsToIana( RockDateTime.OrgTimeZoneInfo.Id );
+
+            PeriodList exceptionDates;
+            if ( calendarEvent.ExceptionDates?.Any() == true )
+            {
+                exceptionDates = calendarEvent.ExceptionDates.First();
+            }
+            else
+            {
+                exceptionDates = new PeriodList { TzId = eventTimeZoneId };
+                if ( isAllDay )
+                {
+                    exceptionDates.Parameters.Set( "TZID", eventTimeZoneId );
+                    exceptionDates.Parameters.Set( "VALUE", "DATE" );
+                }
+            }
+
+            DateTime exceptionDateTime = occurrenceDate;
+            if ( !isAllDay )
+            {
+                exceptionDateTime = occurrenceDate.Add( occurrenceTime );
+            }
+
+            Period exceptionPeriod;
+            if ( isAllDay )
+            {
+                exceptionPeriod = new Period( new CalDateTime( exceptionDateTime ) );
+            }
+            else
+            {
+                exceptionPeriod = new Period( new CalDateTime( exceptionDateTime )
+                {
+                    TzId = eventTimeZoneId,
+                    HasTime = true
+                } );
+            }
+
+            // Check if this exception date already exists
+            var existingException = exceptionDates.FirstOrDefault( ep => 
+                ep.StartTime?.Value != null && 
+                ep.StartTime.Value.Date == occurrenceDate );
+
+            if ( existingException == null )
+            {
+                exceptionDates.Add( exceptionPeriod );
+
+                if ( calendarEvent.ExceptionDates?.Any() != true )
+                {
+                    calendarEvent.ExceptionDates.Add( exceptionDates );
+                }
+
+                // Serialize and normalize
+                var calendar = new Calendar();
+                calendar.Events.Add( calendarEvent );
+                var updatedICalContent = InetCalendarHelperOverrides.SerializeCalendarForExport( calendar );
+
+                schedule.iCalendarContent = updatedICalContent;
+                SetFirstLastOccurrenceDateTimes( reservation );
+
+                rockContext.SaveChanges();
+                return true;
+            }
+
+            return false;
+        }
+
         #endregion
 
         #region GetReservationCalendarFeed

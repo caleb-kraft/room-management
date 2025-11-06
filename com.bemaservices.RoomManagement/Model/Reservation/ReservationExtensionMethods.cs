@@ -1,4 +1,4 @@
-﻿// <copyright>
+// <copyright>
 // Copyright by BEMA Software Services
 //
 // Licensed under the Rock Community License (the "License");
@@ -22,6 +22,9 @@ using System.Linq;
 using System.Reflection;
 using Rock;
 using Rock.Data;
+using com.bemaservices.RoomManagement.Utility.RockInternalMethods;
+using Ical.Net;
+using Ical.Net.CalendarComponents;
 
 namespace com.bemaservices.RoomManagement.Model
 {
@@ -109,6 +112,23 @@ namespace com.bemaservices.RoomManagement.Model
                     var reservationStartDateTime = reservationDateTime.StartDateTime.AddMinutes( -reservation.SetupTime ?? 0 );
                     var reservationEndDateTime = reservationDateTime.EndDateTime.AddMinutes( reservation.CleanupTime ?? 0 );
 
+                    // Check if this is a recurring reservation
+                    var calEvent = InetCalendarHelper.CreateCalendarEvent( reservation.Schedule?.iCalendarContent ?? "" );
+                    var isRecurring = calEvent != null && ( ( calEvent.RecurrenceRules?.Any() == true ) || ( calEvent.RecurrenceDates?.Any() == true ) );
+
+                    // Check if this is an exception occurrence (linked to original via ForeignKey)
+                    var isExceptionOccurrence = !string.IsNullOrWhiteSpace( reservation.ForeignKey ) && 
+                                                reservation.ForeignKey.StartsWith( "OriginalReservation_" );
+                    int? originalReservationId = null;
+                    if ( isExceptionOccurrence )
+                    {
+                        var foreignKeyParts = reservation.ForeignKey.Split( '_' );
+                        if ( foreignKeyParts.Length > 1 && int.TryParse( foreignKeyParts[1], out int originalId ) )
+                        {
+                            originalReservationId = originalId;
+                        }
+                    }
+
                     var validReservationTime = false;
                     if (
                         ( filterTimeBy == FilterTimeBy.Reservation || filterTimeBy == FilterTimeBy.Both ) &&
@@ -181,7 +201,10 @@ namespace com.bemaservices.RoomManagement.Model
                             RequesterAlias = reservation.RequesterAlias,
                             NumberAttending = reservation.NumberAttending,
                             ModifiedDateTime = reservation.ModifiedDateTime,
-                            ScheduleId = reservation.ScheduleId
+                            ScheduleId = reservation.ScheduleId,
+                            IsRecurring = isRecurring,
+                            IsExceptionOccurrence = isExceptionOccurrence,
+                            OriginalReservationId = originalReservationId
                         };
 
                         if ( includeAttributes )

@@ -2495,8 +2495,11 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                             nbSingleOccurrenceWarning.Visible = true;
                             nbSingleOccurrenceWarning.Title = "Editing Single Occurrence";
                             nbSingleOccurrenceWarning.Text = string.Format( 
-                                "You are editing only the occurrence on <strong>{0}</strong>. This will create a separate reservation for this occurrence while keeping the original recurring series unchanged for all other dates.", 
-                                occurrenceDateTime.ToString( "g" ) );
+                                "You are editing only the occurrence on <strong>{0}</strong>. This will create a separate reservation for this occurrence while keeping the original recurring series unchanged for all other dates.<br/><br/>" +
+                                "<a href='{1}?ReservationId={2}' class='btn btn-sm btn-default'>Edit All Occurrences Instead</a>", 
+                                occurrenceDateTime.ToString( "g" ),
+                                this.CurrentPageReference.BuildUrl(),
+                                reservation.Id );
                         }
                     }
                 }
