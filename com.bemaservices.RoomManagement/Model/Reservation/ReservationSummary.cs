@@ -1,4 +1,4 @@
-﻿// <copyright>
+// <copyright>
 // Copyright by BEMA Software Services
 //
 // Licensed under the Rock Community License (the "License");
@@ -224,5 +224,23 @@ namespace com.bemaservices.RoomManagement.Model
         /// </summary>
         /// <value>The attribute values.</value>
         public Dictionary<string, AttributeValueCache> AttributeValues { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether this reservation is part of a recurring series.
+        /// </summary>
+        /// <value><c>true</c> if this reservation is recurring; otherwise, <c>false</c>.</value>
+        public bool IsRecurring { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether this reservation is an exception occurrence (edited separately from the series).
+        /// </summary>
+        /// <value><c>true</c> if this reservation is an exception occurrence; otherwise, <c>false</c>.</value>
+        public bool IsExceptionOccurrence { get; set; }
+
+        /// <summary>
+        /// Gets or sets the original reservation identifier if this is an exception occurrence.
+        /// </summary>
+        /// <value>The original reservation identifier.</value>
+        public int? OriginalReservationId { get; set; }
     }
 }

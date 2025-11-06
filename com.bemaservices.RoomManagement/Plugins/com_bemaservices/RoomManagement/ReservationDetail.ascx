@@ -1,4 +1,4 @@
-﻿<%@ Control Language="C#" AutoEventWireup="true" CodeFile="ReservationDetail.ascx.cs" Inherits="RockWeb.Plugins.com_bemaservices.RoomManagement.ReservationDetail" %>
+<%@ Control Language="C#" AutoEventWireup="true" CodeFile="ReservationDetail.ascx.cs" Inherits="RockWeb.Plugins.com_bemaservices.RoomManagement.ReservationDetail" %>
 <%@ Register TagPrefix="BEMA" Assembly="com.bemaservices.RoomManagement" Namespace="com.bemaservices.RoomManagement.Web.UI.Controls" %>
 <script type="text/javascript">
     function clearActiveDialog ()
@@ -21,6 +21,7 @@ div[id$="_upnlContent"].modal-open:has(div.picker-menu[style*="display: block"])
 
             <asp:HiddenField ID="hfReservationId" runat="server" />
             <asp:HiddenField ID="hfApprovalState" runat="server" />
+            <asp:HiddenField ID="hfOccurrenceDateTime" runat="server" />
             <div class="panel-heading">
                 <h1 class="panel-title">
                     <asp:Literal ID="lPanelTitle" runat="server" />
@@ -34,6 +35,7 @@ div[id$="_upnlContent"].modal-open:has(div.picker-menu[style*="display: block"])
 
             <div class="panel-body">
                 <Rock:NotificationBox ID="nbEditModeMessage" runat="server" NotificationBoxType="Info" />
+                <Rock:NotificationBox ID="nbSingleOccurrenceWarning" runat="server" NotificationBoxType="Warning" Visible="false" />
 
                 <asp:ValidationSummary ID="ValidationSummary1" runat="server" HeaderText="Please Correct the Following" CssClass="alert alert-danger" />
                 <Rock:NotificationBox ID="nbError" runat="server" NotificationBoxType="Danger" />
@@ -170,6 +172,22 @@ div[id$="_upnlContent"].modal-open:has(div.picker-menu[style*="display: block"])
 
                             <Rock:RockLiteral ID="lNotes" runat="server" Label="Notes" />
 
+                        </div>
+                    </div>
+
+                    <div id="divExceptionOccurrences" runat="server" visible="false">
+                        <div class="row">
+                            <div class="col-md-12">
+                                <h4>Exception Occurrences</h4>
+                                <Rock:NotificationBox ID="nbExceptionOccurrences" runat="server" NotificationBoxType="Info" Visible="false" />
+                                <Rock:Grid ID="gExceptionOccurrences" runat="server" AllowPaging="false" DisplayType="Light" RowItemText="Exception Occurrence" OnRowSelected="gExceptionOccurrences_Edit">
+                                    <Columns>
+                                        <Rock:RockBoundField DataField="Name" HeaderText="Name" />
+                                        <Rock:RockBoundField DataField="Schedule.EffectiveStartDate" HeaderText="Date" DataFormatString="{0:g}" />
+                                        <Rock:RockBoundField DataField="ApprovalState" HeaderText="Approval State" />
+                                    </Columns>
+                                </Rock:Grid>
+                            </div>
                         </div>
                     </div>
 
