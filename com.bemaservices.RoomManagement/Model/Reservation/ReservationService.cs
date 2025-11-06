@@ -1,4 +1,4 @@
-﻿// <copyright>
+// <copyright>
 // Copyright by BEMA Software Services
 //
 // Licensed under the Rock Community License (the "License");
@@ -1157,6 +1157,316 @@ namespace com.bemaservices.RoomManagement.Model
             }
 
             return reservation;
+        }
+
+        /// <summary>
+        /// Edits a single occurrence of a recurring reservation by excluding it from the original schedule
+        /// and creating a new reservation for the modified occurrence.
+        /// </summary>
+        /// <param name="originalReservation">The original recurring reservation.</param>
+        /// <param name="occurrenceDateTime">The date/time of the specific occurrence to edit.</param>
+        /// <param name="modifiedReservation">The reservation object containing the modified data for this occurrence.</param>
+        /// <param name="rockContext">The rock context.</param>
+        /// <returns>The newly created reservation for the modified occurrence, or null if the occurrence doesn't exist.</returns>
+        /// <remarks>
+        /// This method implements the standard iCalendar pattern for editing single occurrences:
+        /// 1. Adds an EXDATE (exception date) to the original reservation's schedule to exclude the occurrence
+        /// 2. Creates a new reservation with the modified data for that specific occurrence
+        /// 3. Links the new reservation to the original using ForeignKey/ForeignGuid
+        /// 
+        /// This ensures that:
+        /// - The original recurring series remains intact for all other occurrences
+        /// - Only the specified occurrence is modified
+        /// - Calendar feeds properly reflect the exception
+        /// </remarks>
+        public Reservation EditSingleOccurrence( Reservation originalReservation, DateTime occurrenceDateTime, Reservation modifiedReservation, RockContext rockContext = null )
+        {
+            if ( originalReservation == null )
+            {
+                throw new ArgumentNullException( nameof( originalReservation ) );
+            }
+
+            if ( modifiedReservation == null )
+            {
+                throw new ArgumentNullException( nameof( modifiedReservation ) );
+            }
+
+            rockContext = rockContext ?? new RockContext();
+
+            // Verify the occurrence exists in the original reservation's schedule
+            var occurrences = originalReservation.GetReservationTimes( occurrenceDateTime.Date, occurrenceDateTime.Date.AddDays( 1 ) );
+            var targetOccurrence = occurrences.FirstOrDefault( o => 
+                o.StartDateTime.Date == occurrenceDateTime.Date &&
+                Math.Abs( ( o.StartDateTime - occurrenceDateTime ).TotalMinutes ) < 60 ); // Allow 1 hour tolerance
+
+            if ( targetOccurrence == null )
+            {
+                // Occurrence doesn't exist, return null
+                return null;
+            }
+
+            // Get the original schedule and create a calendar event from it
+            var originalSchedule = originalReservation.Schedule;
+            if ( originalSchedule == null || string.IsNullOrWhiteSpace( originalSchedule.iCalendarContent ) )
+            {
+                throw new InvalidOperationException( "Original reservation must have a valid schedule." );
+            }
+
+            var calendarEvent = InetCalendarHelper.CreateCalendarEvent( originalSchedule.iCalendarContent );
+            if ( calendarEvent == null )
+            {
+                throw new InvalidOperationException( "Could not parse the original reservation's schedule." );
+            }
+
+            // Check if this is a recurring event (has recurrence rules or recurrence dates)
+            var isRecurring = ( calendarEvent.RecurrenceRules?.Any() == true ) || ( calendarEvent.RecurrenceDates?.Any() == true );
+            
+            if ( !isRecurring )
+            {
+                // Not a recurring event, so edit the whole reservation normally
+                // (This shouldn't typically happen, but handle it gracefully)
+                return null;
+            }
+
+            // Step 1: Add EXDATE to the original reservation's schedule
+            var occurrenceDate = occurrenceDateTime.Date;
+            var occurrenceTime = occurrenceDateTime.TimeOfDay;
+
+            // Determine if this is an all-day event
+            var isAllDay = calendarEvent.IsAllDay;
+            var eventTimeZoneId = calendarEvent.DtStart?.TzId ?? TZConvert.WindowsToIana( RockDateTime.OrgTimeZoneInfo.Id );
+
+            // Create or get the exception dates list
+            PeriodList exceptionDates;
+            if ( calendarEvent.ExceptionDates?.Any() == true )
+            {
+                // Use the first existing exception dates list (they should all have the same timezone)
+                exceptionDates = calendarEvent.ExceptionDates.First();
+            }
+            else
+            {
+                // Create a new exception dates list
+                exceptionDates = new PeriodList
+                {
+                    TzId = eventTimeZoneId
+                };
+
+                if ( isAllDay )
+                {
+                    exceptionDates.Parameters.Set( "TZID", eventTimeZoneId );
+                    exceptionDates.Parameters.Set( "VALUE", "DATE" );
+                }
+            }
+
+            // Create the exception period
+            DateTime exceptionDateTime = occurrenceDate;
+            if ( !isAllDay )
+            {
+                exceptionDateTime = occurrenceDate.Add( occurrenceTime );
+            }
+
+            Period exceptionPeriod;
+            if ( isAllDay )
+            {
+                exceptionPeriod = new Period( new CalDateTime( exceptionDateTime ) );
+            }
+            else
+            {
+                exceptionPeriod = new Period( new CalDateTime( exceptionDateTime )
+                {
+                    TzId = eventTimeZoneId,
+                    HasTime = true
+                } );
+            }
+
+            // Check if this exception date already exists
+            var existingException = exceptionDates.FirstOrDefault( ep => 
+                ep.StartTime?.Value != null && 
+                ep.StartTime.Value.Date == occurrenceDate );
+
+            if ( existingException == null )
+            {
+                exceptionDates.Add( exceptionPeriod );
+
+                // Add the exception dates list to the calendar event if it's new
+                if ( calendarEvent.ExceptionDates?.Any() != true )
+                {
+                    calendarEvent.ExceptionDates.Add( exceptionDates );
+                }
+
+                // Serialize the updated calendar event back to iCalendar content
+                var calendar = new Calendar();
+                calendar.Events.Add( calendarEvent );
+                var serializer = new CalendarSerializer();
+                var updatedICalContent = serializer.SerializeToString( calendar );
+
+                // Normalize exception dates (remove duration specifiers) for compatibility
+                updatedICalContent = InetCalendarHelperOverrides.SerializeCalendarForExport( calendar );
+
+                // Update the original schedule
+                originalSchedule.iCalendarContent = updatedICalContent;
+                // Note: The schedule is already attached to the reservation, so we just need to update its content
+
+                // Recalculate first/last occurrence dates for the original reservation
+                originalReservation = SetFirstLastOccurrenceDateTimes( originalReservation );
+            }
+
+            // Step 2: Create a new reservation for the modified occurrence
+            var newReservation = new Reservation
+            {
+                ReservationTypeId = modifiedReservation.ReservationTypeId,
+                ReservationType = modifiedReservation.ReservationType,
+                Name = modifiedReservation.Name,
+                CampusId = modifiedReservation.CampusId,
+                EventItemOccurrenceId = modifiedReservation.EventItemOccurrenceId,
+                ReservationMinistryId = modifiedReservation.ReservationMinistryId,
+                ApprovalState = modifiedReservation.ApprovalState,
+                RequesterAliasId = modifiedReservation.RequesterAliasId ?? originalReservation.RequesterAliasId,
+                SetupTime = modifiedReservation.SetupTime ?? originalReservation.SetupTime,
+                CleanupTime = modifiedReservation.CleanupTime ?? originalReservation.CleanupTime,
+                NumberAttending = modifiedReservation.NumberAttending ?? originalReservation.NumberAttending,
+                Note = modifiedReservation.Note ?? originalReservation.Note,
+                SetupPhotoId = modifiedReservation.SetupPhotoId ?? originalReservation.SetupPhotoId,
+                EventContactPersonAliasId = modifiedReservation.EventContactPersonAliasId ?? originalReservation.EventContactPersonAliasId,
+                EventContactPhone = modifiedReservation.EventContactPhone ?? originalReservation.EventContactPhone,
+                EventContactEmail = modifiedReservation.EventContactEmail ?? originalReservation.EventContactEmail,
+                AdministrativeContactPersonAliasId = modifiedReservation.AdministrativeContactPersonAliasId ?? originalReservation.AdministrativeContactPersonAliasId,
+                AdministrativeContactPhone = modifiedReservation.AdministrativeContactPhone ?? originalReservation.AdministrativeContactPhone,
+                AdministrativeContactEmail = modifiedReservation.AdministrativeContactEmail ?? originalReservation.AdministrativeContactEmail
+            };
+
+            // Link the new reservation to the original using ForeignKey/ForeignGuid
+            newReservation.ForeignKey = $"OriginalReservation_{originalReservation.Id}";
+            newReservation.ForeignGuid = originalReservation.Guid;
+
+            // Create a one-time schedule for the modified occurrence
+            var newSchedule = new Schedule
+            {
+                EffectiveStartDate = occurrenceDateTime.Date,
+                EffectiveEndDate = occurrenceDateTime.Date
+            };
+
+            // Calculate the end time based on the original occurrence duration or modified setup/cleanup times
+            var occurrenceEndDateTime = targetOccurrence.EndDateTime;
+            if ( modifiedReservation.SetupTime.HasValue || modifiedReservation.CleanupTime.HasValue )
+            {
+                // Adjust times if setup/cleanup changed
+                var duration = occurrenceEndDateTime - occurrenceDateTime;
+                if ( modifiedReservation.SetupTime.HasValue && originalReservation.SetupTime.HasValue )
+                {
+                    var setupDiff = modifiedReservation.SetupTime.Value - originalReservation.SetupTime.Value;
+                    occurrenceDateTime = occurrenceDateTime.AddMinutes( -setupDiff );
+                }
+                if ( modifiedReservation.CleanupTime.HasValue && originalReservation.CleanupTime.HasValue )
+                {
+                    var cleanupDiff = modifiedReservation.CleanupTime.Value - originalReservation.CleanupTime.Value;
+                    occurrenceEndDateTime = occurrenceEndDateTime.AddMinutes( cleanupDiff );
+                }
+            }
+
+            // Create a one-time iCalendar event
+            var newCalendarEvent = new CalendarEvent
+            {
+                Uid = $"{calendarEvent.Uid}_exception_{occurrenceDateTime:s}",
+                DtStart = new CalDateTime( occurrenceDateTime )
+                {
+                    TzId = eventTimeZoneId,
+                    HasTime = !isAllDay
+                },
+                DtEnd = new CalDateTime( occurrenceEndDateTime )
+                {
+                    TzId = eventTimeZoneId,
+                    HasTime = !isAllDay
+                },
+                IsAllDay = isAllDay
+            };
+
+            // Copy summary and description from original if not modified
+            if ( !string.IsNullOrWhiteSpace( modifiedReservation.Name ) )
+            {
+                newCalendarEvent.Summary = modifiedReservation.Name;
+            }
+            else if ( !string.IsNullOrWhiteSpace( calendarEvent.Summary ) )
+            {
+                newCalendarEvent.Summary = calendarEvent.Summary;
+            }
+
+            if ( calendarEvent.Description != null )
+            {
+                newCalendarEvent.Description = calendarEvent.Description;
+            }
+
+            var newCalendar = new Calendar();
+            newCalendar.Events.Add( newCalendarEvent );
+            var newSerializer = new CalendarSerializer();
+            newSchedule.iCalendarContent = newSerializer.SerializeToString( newCalendar );
+
+            newReservation.Schedule = newSchedule;
+
+            // Copy locations and resources from modified reservation, or fall back to original
+            if ( modifiedReservation.ReservationLocations?.Any() == true )
+            {
+                foreach ( var location in modifiedReservation.ReservationLocations )
+                {
+                    var newLocation = new ReservationLocation
+                    {
+                        LocationId = location.LocationId,
+                        LocationLayoutId = location.LocationLayoutId,
+                        ApprovalState = location.ApprovalState
+                    };
+                    newReservation.ReservationLocations.Add( newLocation );
+                }
+            }
+            else if ( originalReservation.ReservationLocations?.Any() == true )
+            {
+                foreach ( var location in originalReservation.ReservationLocations )
+                {
+                    var newLocation = new ReservationLocation
+                    {
+                        LocationId = location.LocationId,
+                        LocationLayoutId = location.LocationLayoutId,
+                        ApprovalState = location.ApprovalState
+                    };
+                    newReservation.ReservationLocations.Add( newLocation );
+                }
+            }
+
+            if ( modifiedReservation.ReservationResources?.Any() == true )
+            {
+                foreach ( var resource in modifiedReservation.ReservationResources )
+                {
+                    var newResource = new ReservationResource
+                    {
+                        ResourceId = resource.ResourceId,
+                        Quantity = resource.Quantity,
+                        ReservationLocationId = resource.ReservationLocationId,
+                        ApprovalState = resource.ApprovalState
+                    };
+                    newReservation.ReservationResources.Add( newResource );
+                }
+            }
+            else if ( originalReservation.ReservationResources?.Any() == true )
+            {
+                foreach ( var resource in originalReservation.ReservationResources )
+                {
+                    var newResource = new ReservationResource
+                    {
+                        ResourceId = resource.ResourceId,
+                        Quantity = resource.Quantity,
+                        ReservationLocationId = resource.ReservationLocationId,
+                        ApprovalState = resource.ApprovalState
+                    };
+                    newReservation.ReservationResources.Add( newResource );
+                }
+            }
+
+            // Set first/last occurrence dates for the new reservation
+            newReservation = SetFirstLastOccurrenceDateTimes( newReservation );
+
+            // Add the new reservation
+            Add( newReservation );
+
+            return newReservation;
         }
 
         #endregion

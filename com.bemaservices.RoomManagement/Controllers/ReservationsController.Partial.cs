@@ -1,4 +1,4 @@
-﻿// <copyright>
+// <copyright>
 // Copyright by BEMA Software Services
 //
 // Licensed under the Rock Community License (the "License");
@@ -105,6 +105,53 @@ namespace Rock.Rest.Controllers
                 .GetReservationSummaries( startDateTime, endDateTime, false, includeAttributes, null, filterTimeByEnum );
 
             return reservationSummaryList.AsQueryable();
+        }
+
+        /// <summary>
+        /// Edits a single occurrence of a recurring reservation.
+        /// </summary>
+        /// <param name="reservationId">The ID of the original recurring reservation.</param>
+        /// <param name="occurrenceDateTime">The date/time of the specific occurrence to edit (ISO 8601 format).</param>
+        /// <param name="modifiedReservation">The reservation object containing the modified data for this occurrence.</param>
+        /// <returns>The newly created reservation for the modified occurrence.</returns>
+        [Authenticate, Secured]
+        [System.Web.Http.HttpPost]
+        [System.Web.Http.Route( "api/Reservations/EditSingleOccurrence" )]
+        public com.bemaservices.RoomManagement.Model.Reservation EditSingleOccurrence(
+            int reservationId,
+            DateTime occurrenceDateTime,
+            com.bemaservices.RoomManagement.Model.Reservation modifiedReservation )
+        {
+            RockContext rockContext = new RockContext();
+            ReservationService reservationService = new ReservationService( rockContext );
+
+            var originalReservation = reservationService.Get( reservationId );
+            if ( originalReservation == null )
+            {
+                throw new System.Web.Http.HttpResponseException( 
+                    new System.Net.Http.HttpResponseMessage( System.Net.HttpStatusCode.NotFound )
+                    {
+                        Content = new System.Net.Http.StringContent( $"Reservation with ID {reservationId} not found." )
+                    } );
+            }
+
+            // Ensure the modified reservation is properly attached to the context
+            rockContext.Entry( modifiedReservation ).State = System.Data.Entity.EntityState.Detached;
+            
+            var newReservation = reservationService.EditSingleOccurrence( originalReservation, occurrenceDateTime, modifiedReservation, rockContext );
+            
+            if ( newReservation == null )
+            {
+                throw new System.Web.Http.HttpResponseException( 
+                    new System.Net.Http.HttpResponseMessage( System.Net.HttpStatusCode.BadRequest )
+                    {
+                        Content = new System.Net.Http.StringContent( $"The specified occurrence does not exist in the recurring reservation." )
+                    } );
+            }
+
+            rockContext.SaveChanges();
+
+            return newReservation;
         }
 
     }
