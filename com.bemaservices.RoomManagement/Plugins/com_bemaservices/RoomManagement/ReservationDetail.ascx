@@ -175,6 +175,22 @@ div[id$="_upnlContent"].modal-open:has(div.picker-menu[style*="display: block"])
                         </div>
                     </div>
 
+                    <div id="divExceptionOccurrences" runat="server" visible="false">
+                        <div class="row">
+                            <div class="col-md-12">
+                                <h4>Exception Occurrences</h4>
+                                <Rock:NotificationBox ID="nbExceptionOccurrences" runat="server" NotificationBoxType="Info" Visible="false" />
+                                <Rock:Grid ID="gExceptionOccurrences" runat="server" AllowPaging="false" DisplayType="Light" RowItemText="Exception Occurrence" OnRowSelected="gExceptionOccurrences_Edit">
+                                    <Columns>
+                                        <Rock:RockBoundField DataField="Name" HeaderText="Name" />
+                                        <Rock:RockBoundField DataField="Schedule.EffectiveStartDate" HeaderText="Date" DataFormatString="{0:g}" />
+                                        <Rock:RockBoundField DataField="ApprovalState" HeaderText="Approval State" />
+                                    </Columns>
+                                </Rock:Grid>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="row">
                         <div class="col-md-6">
                             <Rock:ModalAlert ID="mdWorkflowLaunched" runat="server" />

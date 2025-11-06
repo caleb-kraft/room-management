@@ -1614,6 +1614,82 @@ namespace com.bemaservices.RoomManagement.Model
             return false;
         }
 
+        /// <summary>
+        /// Gets all exception occurrences (reservations created from editing single occurrences) for a given reservation.
+        /// </summary>
+        /// <param name="reservation">The original recurring reservation.</param>
+        /// <returns>List of exception occurrence reservations.</returns>
+        public IQueryable<Reservation> GetExceptionOccurrences( Reservation reservation )
+        {
+            if ( reservation == null )
+            {
+                return Queryable().Where( r => false ); // Return empty queryable
+            }
+
+            // Find all reservations linked to this one via ForeignKey or ForeignGuid
+            return Queryable()
+                .Where( r => r.ForeignKey == $"OriginalReservation_{reservation.Id}" || 
+                           ( r.ForeignGuid.HasValue && r.ForeignGuid == reservation.Guid ) )
+                .OrderBy( r => r.Schedule.EffectiveStartDate );
+        }
+
+        /// <summary>
+        /// Gets a count of exception occurrences for a given reservation.
+        /// </summary>
+        /// <param name="reservation">The original recurring reservation.</param>
+        /// <returns>The count of exception occurrences.</returns>
+        public int GetExceptionOccurrenceCount( Reservation reservation )
+        {
+            if ( reservation == null )
+            {
+                return 0;
+            }
+
+            return GetExceptionOccurrences( reservation ).Count();
+        }
+
+        /// <summary>
+        /// Checks if a reservation has any exception occurrences.
+        /// </summary>
+        /// <param name="reservation">The reservation to check.</param>
+        /// <returns><c>true</c> if the reservation has exception occurrences; otherwise, <c>false</c>.</returns>
+        public bool HasExceptionOccurrences( Reservation reservation )
+        {
+            return GetExceptionOccurrenceCount( reservation ) > 0;
+        }
+
+        /// <summary>
+        /// Checks if a reservation is a recurring reservation.
+        /// </summary>
+        /// <param name="reservation">The reservation to check.</param>
+        /// <returns><c>true</c> if the reservation is recurring; otherwise, <c>false</c>.</returns>
+        public static bool IsRecurringReservation( Reservation reservation )
+        {
+            if ( reservation?.Schedule == null || string.IsNullOrWhiteSpace( reservation.Schedule.iCalendarContent ) )
+            {
+                return false;
+            }
+
+            var calEvent = InetCalendarHelper.CreateCalendarEvent( reservation.Schedule.iCalendarContent );
+            return calEvent != null && ( ( calEvent.RecurrenceRules?.Any() == true ) || ( calEvent.RecurrenceDates?.Any() == true ) );
+        }
+
+        /// <summary>
+        /// Checks if a reservation is an exception occurrence (created from editing a single occurrence).
+        /// </summary>
+        /// <param name="reservation">The reservation to check.</param>
+        /// <returns><c>true</c> if the reservation is an exception occurrence; otherwise, <c>false</c>.</returns>
+        public static bool IsExceptionOccurrence( Reservation reservation )
+        {
+            if ( reservation == null )
+            {
+                return false;
+            }
+
+            return !string.IsNullOrWhiteSpace( reservation.ForeignKey ) && 
+                   reservation.ForeignKey.StartsWith( "OriginalReservation_" );
+        }
+
         #endregion
 
         #region GetReservationCalendarFeed

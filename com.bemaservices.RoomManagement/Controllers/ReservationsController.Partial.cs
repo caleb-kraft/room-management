@@ -154,6 +154,79 @@ namespace Rock.Rest.Controllers
             return newReservation;
         }
 
+        /// <summary>
+        /// Deletes a single occurrence of a recurring reservation.
+        /// </summary>
+        /// <param name="reservationId">The ID of the recurring reservation.</param>
+        /// <param name="occurrenceDateTime">The date/time of the specific occurrence to delete (ISO 8601 format).</param>
+        /// <returns>True if the occurrence was successfully deleted.</returns>
+        [Authenticate, Secured]
+        [System.Web.Http.HttpPost]
+        [System.Web.Http.Route( "api/Reservations/DeleteSingleOccurrence" )]
+        public bool DeleteSingleOccurrence(
+            int reservationId,
+            DateTime occurrenceDateTime )
+        {
+            RockContext rockContext = new RockContext();
+            ReservationService reservationService = new ReservationService( rockContext );
+
+            var reservation = reservationService.Get( reservationId );
+            if ( reservation == null )
+            {
+                throw new System.Web.Http.HttpResponseException( 
+                    new System.Net.Http.HttpResponseMessage( System.Net.HttpStatusCode.NotFound )
+                    {
+                        Content = new System.Net.Http.StringContent( $"Reservation with ID {reservationId} not found." )
+                    } );
+            }
+
+            var success = reservationService.DeleteSingleOccurrence( reservation, occurrenceDateTime, rockContext );
+            
+            if ( !success )
+            {
+                throw new System.Web.Http.HttpResponseException( 
+                    new System.Net.Http.HttpResponseMessage( System.Net.HttpStatusCode.BadRequest )
+                    {
+                        Content = new System.Net.Http.StringContent( $"The specified occurrence does not exist in the recurring reservation or the reservation is not recurring." )
+                    } );
+            }
+
+            rockContext.SaveChanges();
+
+            return true;
+        }
+
+        /// <summary>
+        /// Gets all exception occurrences (reservations created from editing single occurrences) for a given reservation.
+        /// </summary>
+        /// <param name="reservationId">The ID of the original recurring reservation.</param>
+        /// <returns>List of exception occurrence reservations.</returns>
+        [Authenticate, Secured]
+        [System.Web.Http.Route( "api/Reservations/GetExceptionOccurrences/{reservationId}" )]
+        public IQueryable<com.bemaservices.RoomManagement.Model.Reservation> GetExceptionOccurrences( int reservationId )
+        {
+            RockContext rockContext = new RockContext();
+            ReservationService reservationService = new ReservationService( rockContext );
+
+            var originalReservation = reservationService.Get( reservationId );
+            if ( originalReservation == null )
+            {
+                throw new System.Web.Http.HttpResponseException( 
+                    new System.Net.Http.HttpResponseMessage( System.Net.HttpStatusCode.NotFound )
+                    {
+                        Content = new System.Net.Http.StringContent( $"Reservation with ID {reservationId} not found." )
+                    } );
+            }
+
+            // Find all reservations linked to this one via ForeignKey
+            var exceptionOccurrences = reservationService.Queryable()
+                .Where( r => r.ForeignKey == $"OriginalReservation_{reservationId}" || 
+                           ( r.ForeignGuid.HasValue && r.ForeignGuid == originalReservation.Guid ) )
+                .OrderBy( r => r.Schedule.EffectiveStartDate );
+
+            return exceptionOccurrences;
+        }
+
     }
 }
 

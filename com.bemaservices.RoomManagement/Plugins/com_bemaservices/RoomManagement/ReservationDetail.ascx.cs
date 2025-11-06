@@ -1174,6 +1174,17 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
         }
 
         /// <summary>
+        /// Handles the Edit event of the gExceptionOccurrences control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="RowEventArgs" /> instance containing the event data.</param>
+        protected void gExceptionOccurrences_Edit( object sender, RowEventArgs e )
+        {
+            var reservationId = ( int ) e.RowKeyValue;
+            ShowDetail( reservationId );
+        }
+
+        /// <summary>
         /// Handles the Click event of the btnOverride control.
         /// </summary>
         /// <param name="sender">The source of the event.</param>
@@ -2544,6 +2555,47 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                 btnDownload.Text = btnDownloadText.ResolveMergeFields( mergeFields );
 
                 ModifiedDateTime = reservation.ReservationModifiedDateTime;
+            }
+
+            // Check if this reservation has exception occurrences and display them
+            if ( reservation != null && reservation.Id > 0 )
+            {
+                var exceptionOccurrences = reservationService.GetExceptionOccurrences( reservation ).ToList();
+                if ( exceptionOccurrences.Any() )
+                {
+                    divExceptionOccurrences.Visible = true;
+                    gExceptionOccurrences.EntityTypeId = EntityTypeCache.Get<Reservation>().Id;
+                    gExceptionOccurrences.SetLinqDataSource( exceptionOccurrences );
+                    gExceptionOccurrences.DataBind();
+                }
+                else
+                {
+                    divExceptionOccurrences.Visible = false;
+                }
+
+                // Check if this reservation IS an exception occurrence
+                var isExceptionOccurrence = !string.IsNullOrWhiteSpace( reservation.ForeignKey ) && 
+                                           reservation.ForeignKey.StartsWith( "OriginalReservation_" );
+                if ( isExceptionOccurrence )
+                {
+                    var foreignKeyParts = reservation.ForeignKey.Split( '_' );
+                    if ( foreignKeyParts.Length > 1 && int.TryParse( foreignKeyParts[1], out int originalReservationId ) )
+                    {
+                        var originalReservation = reservationService.Get( originalReservationId );
+                        if ( originalReservation != null )
+                        {
+                            nbSingleOccurrenceWarning.Visible = true;
+                            nbSingleOccurrenceWarning.NotificationBoxType = Rock.Web.UI.Controls.NotificationBoxType.Info;
+                            nbSingleOccurrenceWarning.Title = "Exception Occurrence";
+                            nbSingleOccurrenceWarning.Text = string.Format( 
+                                "This reservation is an exception occurrence from the recurring series <strong>{0}</strong>. " +
+                                "<a href='{1}?ReservationId={2}' class='btn btn-sm btn-default'>View Original Series</a>", 
+                                originalReservation.Name,
+                                this.CurrentPageReference.BuildUrl(),
+                                originalReservationId );
+                        }
+                    }
+                }
             }
 
             if ( reservation == null )
