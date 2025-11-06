@@ -647,9 +647,31 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
 
                 Reservation oldReservation = BuildOldReservation( resourceService, locationService, reservationService, reservation );
 
-                var reservationType = new ReservationTypeService( rockContext ).Get( ReservationType.Id );
+                var reservationType = new ReservationTypeService( rockContext ).Queryable()
+                    .Include( "ReservationTypeResources.Resource" )
+                    .Where( rt => rt.Id == ReservationType.Id )
+                    .FirstOrDefault();
                 reservation.ReservationType = reservationType;
                 reservation.ReservationTypeId = reservationType.Id;
+
+                // Automatically add resources configured for this reservation type if this is a new reservation
+                if ( reservation.Id == 0 && reservationType.ReservationTypeResources != null && reservationType.ReservationTypeResources.Any() )
+                {
+                    foreach ( var typeResource in reservationType.ReservationTypeResources )
+                    {
+                        // Check if this resource is already in ResourcesState
+                        if ( !ResourcesState.Any( r => r.ResourceId == typeResource.ResourceId ) )
+                        {
+                            var resourceSummary = new ReservationResourceSummary();
+                            resourceSummary.ResourceId = typeResource.ResourceId;
+                            resourceSummary.Resource = typeResource.Resource;
+                            resourceSummary.Quantity = typeResource.Quantity;
+                            resourceSummary.Guid = Guid.NewGuid();
+                            resourceSummary.ApprovalState = ReservationResourceApprovalState.Unapproved;
+                            ResourcesState.Add( resourceSummary );
+                        }
+                    }
+                }
 
                 foreach ( var reservationLocationState in LocationsState )
                 {
@@ -1051,7 +1073,10 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
         protected void ddlReservationType_SelectedIndexChanged( object sender, EventArgs e )
         {
             var rockContext = new RockContext();
-            ReservationType = new ReservationTypeService( rockContext ).Get( ddlReservationType.SelectedValueAsId().Value );
+            ReservationType = new ReservationTypeService( rockContext ).Queryable()
+                .Include( "ReservationTypeResources.Resource" )
+                .Where( rt => rt.Id == ddlReservationType.SelectedValueAsId().Value )
+                .FirstOrDefault();
 
             ddlMinistry.Items.Clear();
             ddlMinistry.Items.Add( new ListItem( string.Empty, string.Empty ) );
@@ -1064,6 +1089,27 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             LoadAdditionalInfo( resetReservationControls: true );
 
             SetRequiredFieldsBasedOnReservationType( ReservationType );
+
+            // Automatically add resources configured for this reservation type
+            if ( ReservationType != null && ReservationType.ReservationTypeResources != null && ReservationType.ReservationTypeResources.Any() )
+            {
+                foreach ( var typeResource in ReservationType.ReservationTypeResources )
+                {
+                    // Check if this resource is already in the ResourcesState
+                    if ( !ResourcesState.Any( r => r.ResourceId == typeResource.ResourceId ) )
+                    {
+                        var resourceSummary = new ReservationResourceSummary();
+                        resourceSummary.ResourceId = typeResource.ResourceId;
+                        resourceSummary.Resource = typeResource.Resource;
+                        resourceSummary.Quantity = typeResource.Quantity;
+                        resourceSummary.Guid = Guid.NewGuid();
+                        resourceSummary.ApprovalState = ReservationResourceApprovalState.Unapproved;
+                        ResourcesState.Add( resourceSummary );
+                    }
+                }
+
+                BindReservationResourcesGrid();
+            }
 
             LoadPickers();
         }

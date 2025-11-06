@@ -1,4 +1,4 @@
-﻿<%@ Control Language="C#" AutoEventWireup="true" CodeFile="ReservationTypeDetail.ascx.cs" Inherits="RockWeb.Plugins.com_bemaservices.RoomManagement.ReservationTypeDetail" %>
+<%@ Control Language="C#" AutoEventWireup="true" CodeFile="ReservationTypeDetail.ascx.cs" Inherits="RockWeb.Plugins.com_bemaservices.RoomManagement.ReservationTypeDetail" %>
 
 <script type="text/javascript">
     function clearActiveDialog ()
@@ -146,6 +146,20 @@
                         </div>
                     </Rock:PanelWidget>
 
+                    <Rock:PanelWidget ID="wpTypeResources" runat="server" Title="Automatic Resources">
+                        <div class="grid">
+                            <Rock:Grid ID="gTypeResources" runat="server" AllowPaging="false" DisplayType="Light" RowItemText="Resource" ShowConfirmDeleteDialog="false">
+                                <Columns>
+                                    <Rock:RockBoundField DataField="Resource.Name" HeaderText="Resource" />
+                                    <Rock:RockBoundField DataField="Resource.Category.Name" HeaderText="Category" />
+                                    <Rock:RockBoundField DataField="Quantity" HeaderText="Quantity" />
+                                    <Rock:EditField OnClick="gTypeResources_Edit" />
+                                    <Rock:DeleteField OnClick="gTypeResources_Delete" />
+                                </Columns>
+                            </Rock:Grid>
+                        </div>
+                    </Rock:PanelWidget>
+
                     <div class="actions">
                         <asp:LinkButton ID="btnSave" runat="server" AccessKey="s" ToolTip="Alt+s" Text="Save" CssClass="btn btn-primary" OnClick="btnSave_Click" />
                         <asp:LinkButton ID="btnCancel" runat="server" AccessKey="c" ToolTip="Alt+c" Text="Cancel" CssClass="btn btn-link" CausesValidation="false" OnClick="btnCancel_Click" />
@@ -207,6 +221,14 @@
                     </div>
                 </div>
 
+            </Content>
+        </Rock:ModalDialog>
+
+        <Rock:ModalDialog ID="dlgTypeResource" runat="server" ScrollbarEnabled="false" SaveButtonText="Add" OnSaveClick="btnAddTypeResource_Click" Title="Add Automatic Resource" ValidationGroup="TypeResource">
+            <Content>
+                <asp:HiddenField ID="hfAddTypeResourceGuid" runat="server" />
+                <Rock:ResourcePicker ID="rpResource" runat="server" Required="true" Label="Resource" ValidationGroup="TypeResource" />
+                <Rock:NumberBox ID="nbResourceQuantity" runat="server" Label="Quantity" Help="Optional: The quantity of this resource to automatically add. Leave empty to use the default quantity." NumberType="Integer" MinimumValue="1" ValidationGroup="TypeResource" />
             </Content>
         </Rock:ModalDialog>
     </ContentTemplate>

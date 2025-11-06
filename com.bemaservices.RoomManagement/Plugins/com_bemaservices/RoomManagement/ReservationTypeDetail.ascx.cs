@@ -1,4 +1,4 @@
-﻿// <copyright>
+// <copyright>
 // Copyright by BEMA Software Services
 //
 // Licensed under the Rock Community License (the "License");
@@ -87,6 +87,11 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
         /// </summary>
         /// <value>The state of the reservation workflow triggers.</value>
         private List<ReservationWorkflowTrigger> ReservationWorkflowTriggersState { get; set; }
+        /// <summary>
+        /// Gets or sets the state of the reservation type resources.
+        /// </summary>
+        /// <value>The state of the reservation type resources.</value>
+        private List<ReservationTypeResource> ReservationTypeResourcesState { get; set; }
 
         #endregion
 
@@ -139,6 +144,16 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             {
                 ReservationWorkflowTriggersState = JsonConvert.DeserializeObject<List<ReservationWorkflowTrigger>>( json );
             }
+
+            json = ViewState["ReservationTypeResourcesState"] as string;
+            if ( string.IsNullOrWhiteSpace( json ) )
+            {
+                ReservationTypeResourcesState = new List<ReservationTypeResource>();
+            }
+            else
+            {
+                ReservationTypeResourcesState = JsonConvert.DeserializeObject<List<ReservationTypeResource>>( json );
+            }
         }
 
         /// <summary>
@@ -174,6 +189,11 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             gWorkflowTriggers.Actions.ShowAdd = true;
             gWorkflowTriggers.Actions.AddClick += gWorkflowTriggers_Add;
             gWorkflowTriggers.GridRebind += gWorkflowTriggers_GridRebind;
+
+            gTypeResources.DataKeyNames = new string[] { "Guid" };
+            gTypeResources.Actions.ShowAdd = true;
+            gTypeResources.Actions.AddClick += gTypeResources_Add;
+            gTypeResources.GridRebind += gTypeResources_GridRebind;
 
             btnSecurity.EntityTypeId = EntityTypeCache.Get( typeof( com.bemaservices.RoomManagement.Model.ReservationType ) ).Id;
 
@@ -212,6 +232,7 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             ViewState["ReservationApprovalGroupsState"] = JsonConvert.SerializeObject( ReservationApprovalGroupsState, Formatting.None, jsonSetting );
             ViewState["ReservationMinistriesState"] = JsonConvert.SerializeObject( ReservationMinistriesState, Formatting.None, jsonSetting );
             ViewState["ReservationWorkflowTriggersState"] = JsonConvert.SerializeObject( ReservationWorkflowTriggersState, Formatting.None, jsonSetting );
+            ViewState["ReservationTypeResourcesState"] = JsonConvert.SerializeObject( ReservationTypeResourcesState, Formatting.None, jsonSetting );
 
             return base.SaveViewState();
         }
@@ -297,6 +318,7 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                     var reservationLocationTypeService = new ReservationLocationTypeService( rockContext );
                     var reservationApprovalGroupService = new ReservationApprovalGroupService( rockContext );
                     var reservationMinistryService = new ReservationMinistryService( rockContext );
+                    var reservationTypeResourceService = new ReservationTypeResourceService( rockContext );
 
                     var reservationQry = reservationService.Queryable().Where( r => r.ReservationTypeId == reservationType.Id );
                     var reservationResourceQry = reservationResourceService.Queryable().Where( rr => rr.Reservation.ReservationTypeId == reservationType.Id );
@@ -305,11 +327,13 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                     var reservationLocationTypeQry = reservationLocationTypeService.Queryable().Where( rlt => rlt.ReservationTypeId == reservationType.Id );
                     var reservationApprovalGroupQry = reservationApprovalGroupService.Queryable().Where( rm => rm.ReservationTypeId == reservationType.Id );
                     var reservationMinistryQry = reservationMinistryService.Queryable().Where( rm => rm.ReservationTypeId == reservationType.Id );
+                    var reservationTypeResourceQry = reservationTypeResourceService.Queryable().Where( rtr => rtr.ReservationTypeId == reservationType.Id );
 
                     reservationApprovalGroupService.DeleteRange( reservationApprovalGroupQry );
                     reservationMinistryService.DeleteRange( reservationMinistryQry );
                     reservationWorkfowTriggerService.DeleteRange( reservationTriggerQry );
                     reservationLocationTypeService.DeleteRange( reservationLocationTypeQry );
+                    reservationTypeResourceService.DeleteRange( reservationTypeResourceQry );
                     reservationResourceService.DeleteRange( reservationResourceQry );
                     reservationLocationService.DeleteRange( reservationLocationQry );
                     reservationService.DeleteRange( reservationQry );
@@ -366,6 +390,7 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                 ReservationLocationTypeService reservationLocationTypeService = new ReservationLocationTypeService( rockContext );
                 AttributeService attributeService = new AttributeService( rockContext );
                 AttributeQualifierService qualifierService = new AttributeQualifierService( rockContext );
+                ReservationTypeResourceService reservationTypeResourceService = new ReservationTypeResourceService( rockContext );
 
                 int reservationTypeId = int.Parse( hfReservationTypeId.Value );
 
@@ -376,7 +401,7 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                 }
                 else
                 {
-                    reservationType = reservationTypeService.Queryable( "ReservationMinistries, ReservationWorkflowTriggers" ).Where( c => c.Id == reservationTypeId ).FirstOrDefault();
+                    reservationType = reservationTypeService.Queryable( "ReservationMinistries, ReservationWorkflowTriggers, ReservationTypeResources" ).Where( c => c.Id == reservationTypeId ).FirstOrDefault();
 
                     var uiGroups = ReservationApprovalGroupsState.Select( r => r.Guid );
                     foreach ( var reservationApprovalGroup in reservationType.ReservationApprovalGroups.Where( r => !uiGroups.Contains( r.Guid ) ).ToList() )
@@ -404,6 +429,13 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                     {
                         reservationType.ReservationLocationTypes.Remove( reservationLocationType );
                         reservationLocationTypeService.Delete( reservationLocationType );
+                    }
+
+                    var uiTypeResources = ReservationTypeResourcesState.Select( r => r.Guid );
+                    foreach ( var reservationTypeResource in reservationType.ReservationTypeResources.Where( r => !uiTypeResources.Contains( r.Guid ) ).ToList() )
+                    {
+                        reservationType.ReservationTypeResources.Remove( reservationTypeResource );
+                        reservationTypeResourceService.Delete( reservationTypeResource );
                     }
                 }
 
@@ -481,6 +513,19 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                     }
                     reservationLocationType.ReservationTypeId = reservationTypeId;
                     reservationLocationType.LocationTypeValueId = locationTypeValueId;
+                }
+
+                foreach ( var reservationTypeResourceState in ReservationTypeResourcesState )
+                {
+                    ReservationTypeResource reservationTypeResource = reservationType.ReservationTypeResources.Where( a => a.Guid == reservationTypeResourceState.Guid ).FirstOrDefault();
+                    if ( reservationTypeResource == null )
+                    {
+                        reservationTypeResource = new ReservationTypeResource();
+                        reservationType.ReservationTypeResources.Add( reservationTypeResource );
+                    }
+
+                    reservationTypeResource.CopyPropertiesFrom( reservationTypeResourceState );
+                    reservationTypeResource.ReservationTypeId = reservationTypeId;
                 }
 
                 if ( !reservationType.IsValid )
@@ -1269,6 +1314,144 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
 
         #endregion
 
+        #region ReservationTypeResource Events
+
+        /// <summary>
+        /// Handles the Delete event of the gTypeResources control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="RowEventArgs" /> instance containing the event data.</param>
+        protected void gTypeResources_Delete( object sender, RowEventArgs e )
+        {
+            Guid rowGuid = ( Guid ) e.RowKeyValue;
+            ReservationTypeResourcesState.RemoveEntity( rowGuid );
+            BindReservationTypeResourcesGrid();
+        }
+
+        /// <summary>
+        /// Handles the Click event of the btnAddTypeResource control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="EventArgs" /> instance containing the event data.</param>
+        protected void btnAddTypeResource_Click( object sender, EventArgs e )
+        {
+            var rockContext = new RockContext();
+            var resourceService = new ResourceService( rockContext );
+
+            ReservationTypeResource reservationTypeResource = null;
+            Guid guid = hfAddTypeResourceGuid.Value.AsGuid();
+            if ( !guid.IsEmpty() )
+            {
+                reservationTypeResource = ReservationTypeResourcesState.FirstOrDefault( l => l.Guid.Equals( guid ) );
+            }
+
+            if ( reservationTypeResource == null )
+            {
+                reservationTypeResource = new ReservationTypeResource();
+            }
+
+            var resource = resourceService.Get( rpResource.SelectedValueAsId().Value );
+            if ( resource != null )
+            {
+                reservationTypeResource.ResourceId = resource.Id;
+                reservationTypeResource.Resource = resource;
+            }
+
+            reservationTypeResource.Quantity = nbResourceQuantity.Text.AsIntegerOrNull();
+
+            if ( !reservationTypeResource.IsValid )
+            {
+                return;
+            }
+            if ( ReservationTypeResourcesState.Any( a => a.Guid.Equals( reservationTypeResource.Guid ) ) )
+            {
+                ReservationTypeResourcesState.RemoveEntity( reservationTypeResource.Guid );
+            }
+            ReservationTypeResourcesState.Add( reservationTypeResource );
+
+            BindReservationTypeResourcesGrid();
+
+            HideDialog();
+        }
+
+        /// <summary>
+        /// Handles the GridRebind event of the gTypeResources control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="EventArgs" /> instance containing the event data.</param>
+        private void gTypeResources_GridRebind( object sender, EventArgs e )
+        {
+            BindReservationTypeResourcesGrid();
+        }
+
+        /// <summary>
+        /// Handles the Add event of the gTypeResources control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="EventArgs" /> instance containing the event data.</param>
+        private void gTypeResources_Add( object sender, EventArgs e )
+        {
+            gTypeResources_ShowEdit( Guid.Empty );
+        }
+
+        /// <summary>
+        /// Handles the Edit event of the gTypeResources control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="RowEventArgs" /> instance containing the event data.</param>
+        protected void gTypeResources_Edit( object sender, RowEventArgs e )
+        {
+            Guid reservationTypeResourceGuid = ( Guid ) e.RowKeyValue;
+            gTypeResources_ShowEdit( reservationTypeResourceGuid );
+        }
+
+        /// <summary>
+        /// Shows the edit dialog for reservation type resource.
+        /// </summary>
+        /// <param name="reservationTypeResourceGuid">The reservation type resource unique identifier.</param>
+        protected void gTypeResources_ShowEdit( Guid reservationTypeResourceGuid )
+        {
+            ReservationTypeResource reservationTypeResource = ReservationTypeResourcesState.FirstOrDefault( l => l.Guid.Equals( reservationTypeResourceGuid ) );
+            
+            rpResource.SelectedValue = null;
+            nbResourceQuantity.Text = string.Empty;
+
+            if ( reservationTypeResource != null )
+            {
+                rpResource.SelectedValue = reservationTypeResource.ResourceId.ToString();
+                nbResourceQuantity.Text = reservationTypeResource.Quantity.ToStringSafe();
+            }
+
+            hfAddTypeResourceGuid.Value = reservationTypeResourceGuid.ToString();
+            ShowDialog( "TypeResource", true );
+        }
+
+        /// <summary>
+        /// Binds the reservation type resources grid.
+        /// </summary>
+        private void BindReservationTypeResourcesGrid()
+        {
+            var rockContext = new RockContext();
+            var resourceService = new ResourceService( rockContext );
+            
+            gTypeResources.DataSource = ReservationTypeResourcesState.Select( c =>
+            {
+                var resource = resourceService.Get( c.ResourceId );
+                return new
+                {
+                    c.Id,
+                    c.Guid,
+                    Resource = resource != null ? resource : new Resource { Name = "Unknown", Category = new Category { Name = "" } },
+                    c.Quantity
+                };
+            } ).ToList();
+            gTypeResources.DataBind();
+        }
+
+        #endregion
+
+        #endregion
+
         #region Internal Methods
 
         /// <summary>
@@ -1388,11 +1571,13 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             ReservationWorkflowTriggersState = reservationType.ReservationWorkflowTriggers.ToList();
             ReservationApprovalGroupsState = reservationType.ReservationApprovalGroups.ToList();
             ReservationMinistriesState = reservationType.ReservationMinistries.ToList();
+            ReservationTypeResourcesState = reservationType.ReservationTypeResources.ToList();
 
             BindAttributesGrid();
             BindReservationApprovalGroupsGrid();
             BindReservationMinistriesGrid();
             BindReservationWorkflowTriggersGrid();
+            BindReservationTypeResourcesGrid();
 
             var locationTypeCache = DefinedTypeCache.Get( Rock.SystemGuid.DefinedType.LOCATION_TYPE );
             dvpReservableLocationTypes.DefinedTypeId = locationTypeCache.Id;
@@ -1456,6 +1641,7 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             {
                 rockContext = rockContext ?? new RockContext();
                 reservationType = new ReservationTypeService( rockContext ).Queryable()
+                    .Include( "ReservationTypeResources.Resource" )
                     .Where( c => c.Id == reservationTypeId )
                     .FirstOrDefault();
                 RockPage.SaveSharedItem( key, reservationType );
@@ -1507,6 +1693,9 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                 case "RESERVATIONWORKFLOWTRIGGERS":
                     dlgWorkflowTrigger.Show();
                     break;
+                case "TYPERESOURCE":
+                    dlgTypeResource.Show();
+                    break;
             }
         }
 
@@ -1546,6 +1735,9 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                     break;
                 case "RESERVATIONWORKFLOWTRIGGERS":
                     dlgWorkflowTrigger.Hide();
+                    break;
+                case "TYPERESOURCE":
+                    dlgTypeResource.Hide();
                     break;
             }
 

@@ -1,4 +1,4 @@
-﻿// <copyright>
+// <copyright>
 // Copyright by BEMA Software Services
 //
 // Licensed under the Rock Community License (the "License");
@@ -363,6 +363,22 @@ namespace com.bemaservices.RoomManagement.Model
         /// The reservation location types
         /// </summary>
         private ICollection<ReservationLocationType> _reservationLocationTypes;
+
+        /// <summary>
+        /// Gets or sets the reservation type resources.
+        /// </summary>
+        /// <value>The reservation type resources.</value>
+        [LavaVisibleAttribute]
+        public virtual ICollection<ReservationTypeResource> ReservationTypeResources
+        {
+            get { return _reservationTypeResources ?? ( _reservationTypeResources = new Collection<ReservationTypeResource>() ); }
+            set { _reservationTypeResources = value; }
+        }
+
+        /// <summary>
+        /// The reservation type resources
+        /// </summary>
+        private ICollection<ReservationTypeResource> _reservationTypeResources;
 
         /// <summary>
         /// Gets the supported actions.
