@@ -455,6 +455,7 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                 reservationType.ContactPhoneTypeValueId = dvpPhoneNumberTypes.SelectedValueAsId();
                 reservationType.DefaultReservationDuration = nbDefaultEndDate.Text.AsInteger();
                 reservationType.MaximumReservationDuration = nbMaxEndDate.Text.AsIntegerOrNull();
+                reservationType.MinistryDefinedTypeId = dtpMinistryDefinedType.SelectedValueAsId();
 
                 reservationType.LocationRequirement = rblLocationRequirements.SelectedValueAsEnum<ReservationTypeRequirement>( ReservationTypeRequirement.Allow );
                 reservationType.ResourceRequirement = rblResourceRequirements.SelectedValueAsEnum<ReservationTypeRequirement>( ReservationTypeRequirement.Allow );
@@ -981,7 +982,18 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             {
                 reservationMinistry = new ReservationMinistry();
             }
-            reservationMinistry.Name = tbMinistryName.Text;
+            
+            var definedValueId = dvpMinistry.SelectedValueAsId();
+            if ( definedValueId.HasValue )
+            {
+                reservationMinistry.DefinedValueId = definedValueId.Value;
+                var definedValue = new DefinedValueService( new RockContext() ).Get( definedValueId.Value );
+                if ( definedValue != null )
+                {
+                    reservationMinistry.Name = definedValue.Value; // Keep Name for backward compatibility
+                }
+            }
+            
             if ( !reservationMinistry.IsValid )
             {
                 return;
@@ -1012,8 +1024,20 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
         /// </summary>
         /// <param name="sender">The source of the event.</param>
         /// <param name="e">The <see cref="EventArgs" /> instance containing the event data.</param>
-        private void gMinistries_Add( object sender, EventArgs e )
+        protected void gMinistries_Add( object sender, EventArgs e )
         {
+            // Set the DefinedType for the picker based on ReservationType
+            var reservationTypeId = hfReservationTypeId.Value.AsInteger();
+            if ( reservationTypeId > 0 )
+            {
+                var rockContext = new RockContext();
+                var reservationType = new ReservationTypeService( rockContext ).Get( reservationTypeId );
+                if ( reservationType != null && reservationType.MinistryDefinedTypeId.HasValue )
+                {
+                    dvpMinistry.DefinedTypeId = reservationType.MinistryDefinedTypeId.Value;
+                }
+            }
+            
             gMinistries_ShowEdit( Guid.Empty );
         }
 
@@ -1035,7 +1059,28 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
         protected void gMinistries_ShowEdit( Guid reservationMinistryGuid )
         {
             ReservationMinistry reservationMinistry = ReservationMinistriesState.FirstOrDefault( l => l.Guid.Equals( reservationMinistryGuid ) );
-            tbMinistryName.Text = reservationMinistry != null ? reservationMinistry.Name : string.Empty;
+            
+            dvpMinistry.SelectedValue = null;
+            
+            // Set the DefinedType for the picker based on ReservationType
+            var reservationTypeId = hfReservationTypeId.Value.AsInteger();
+            if ( reservationTypeId > 0 )
+            {
+                var rockContext = new RockContext();
+                var reservationType = new ReservationTypeService( rockContext ).Get( reservationTypeId );
+                if ( reservationType != null && reservationType.MinistryDefinedTypeId.HasValue )
+                {
+                    dvpMinistry.DefinedTypeId = reservationType.MinistryDefinedTypeId.Value;
+                }
+            }
+            
+            if ( reservationMinistry != null )
+            {
+                if ( reservationMinistry.DefinedValueId.HasValue )
+                {
+                    dvpMinistry.SelectedValue = reservationMinistry.DefinedValueId.ToString();
+                }
+            }
 
             hfAddMinistryGuid.Value = reservationMinistryGuid.ToString();
             ShowDialog( "ReservationMinistries", true );
@@ -1047,7 +1092,27 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
         private void BindReservationMinistriesGrid()
         {
             SetReservationMinistryListOrder( ReservationMinistriesState );
-            gMinistries.DataSource = ReservationMinistriesState.OrderBy( a => a.Name ).ToList();
+            var rockContext = new RockContext();
+            var definedValueService = new DefinedValueService( rockContext );
+            
+            gMinistries.DataSource = ReservationMinistriesState.Select( m =>
+            {
+                string ministryName = m.Name;
+                if ( m.DefinedValueId.HasValue )
+                {
+                    var definedValue = definedValueService.Get( m.DefinedValueId.Value );
+                    if ( definedValue != null )
+                    {
+                        ministryName = definedValue.Value;
+                    }
+                }
+                return new
+                {
+                    m.Id,
+                    m.Guid,
+                    MinistryName = ministryName
+                };
+            } ).OrderBy( a => a.MinistryName ).ToList();
 
             gMinistries.DataBind();
         }
@@ -1597,7 +1662,27 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             {
                 dvpReservableLocationTypes.SetValues( reservationType.ReservationLocationTypes.Select( rlt => rlt.LocationTypeValueId ).ToList() );
                 dvpPhoneNumberTypes.SetValue( reservationType.ContactPhoneTypeValueId );
+                dtpMinistryDefinedType.SetValue( reservationType.MinistryDefinedTypeId );
+                
+                // Configure the DefinedValuePicker for ministries based on the selected DefinedType
+                if ( reservationType.MinistryDefinedTypeId.HasValue )
+                {
+                    dvpMinistry.DefinedTypeId = reservationType.MinistryDefinedTypeId.Value;
+                }
             }
+            
+            // Handle DefinedType change event
+            dtpMinistryDefinedType.SelectedIndexChanged += ( s, e ) =>
+            {
+                if ( dtpMinistryDefinedType.SelectedValueAsId().HasValue )
+                {
+                    dvpMinistry.DefinedTypeId = dtpMinistryDefinedType.SelectedValueAsId().Value;
+                }
+                else
+                {
+                    dvpMinistry.DefinedTypeId = null;
+                }
+            };
 
             if ( reservationType.Id == 0 || !dvpReservableLocationTypes.SelectedValues.Any() )
             {

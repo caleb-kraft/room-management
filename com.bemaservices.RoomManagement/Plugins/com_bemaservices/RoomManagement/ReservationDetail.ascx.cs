@@ -440,7 +440,7 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                             ReservationTypeId = ReservationType.Id,
                             Name = rtbName.Text,
                             CampusId = ddlCampus.SelectedValueAsId(),
-                            ReservationMinistryId = ddlMinistry.SelectedValueAsId(),
+                            ReservationMinistryId = GetReservationMinistryId(),
                             ApprovalState = reservation.ApprovalState,
                             RequesterAliasId = reservation.RequesterAliasId,
                             SetupTime = nbSetupTime.Text.AsIntegerOrNull(),
@@ -649,6 +649,7 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
 
                 var reservationType = new ReservationTypeService( rockContext ).Queryable()
                     .Include( "ReservationTypeResources.Resource" )
+                    .Include( "MinistryDefinedType" )
                     .Where( rt => rt.Id == ReservationType.Id )
                     .FirstOrDefault();
                 reservation.ReservationType = reservationType;
@@ -805,13 +806,14 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                 }
 
                 ReservationMinistry newMinistry = null;
-                if ( ddlMinistry.SelectedValueAsId().HasValue )
+                var ministryId = GetReservationMinistryId();
+                if ( ministryId.HasValue )
                 {
-                    newMinistry = reservationMinistryService.Get( ddlMinistry.SelectedValueAsId().Value );
+                    newMinistry = reservationMinistryService.Get( ministryId.Value );
                 }
 
                 History.EvaluateChange( changes, "Ministry", oldMinistry != null ? oldMinistry.Name : "None", newMinistry != null ? newMinistry.Name : "None" );
-                reservation.ReservationMinistryId = ddlMinistry.SelectedValueAsId();
+                reservation.ReservationMinistryId = ministryId;
 
                 int? orphanedPhotoId = null;
                 if ( reservation.SetupPhotoId != fuSetupPhoto.BinaryFileId )
@@ -1075,15 +1077,33 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             var rockContext = new RockContext();
             ReservationType = new ReservationTypeService( rockContext ).Queryable()
                 .Include( "ReservationTypeResources.Resource" )
+                .Include( "MinistryDefinedType" )
                 .Where( rt => rt.Id == ddlReservationType.SelectedValueAsId().Value )
                 .FirstOrDefault();
 
             ddlMinistry.Items.Clear();
             ddlMinistry.Items.Add( new ListItem( string.Empty, string.Empty ) );
 
-            foreach ( var ministry in new ReservationMinistryService( rockContext ).Queryable().AsNoTracking().Where( m => m.ReservationTypeId == ReservationType.Id ).OrderBy( m => m.Name ).ToList() )
+            // If ReservationType has a MinistryDefinedTypeId, use DefinedValuePicker instead
+            if ( ReservationType != null && ReservationType.MinistryDefinedTypeId.HasValue )
             {
-                ddlMinistry.Items.Add( new ListItem( ministry.Name, ministry.Id.ToString().ToUpper() ) );
+                dvpMinistry.DefinedTypeId = ReservationType.MinistryDefinedTypeId.Value;
+                dvpMinistry.Visible = true;
+                ddlMinistry.Visible = false;
+            }
+            else
+            {
+                // Fall back to old behavior - populate from ReservationMinistry records
+                dvpMinistry.Visible = false;
+                ddlMinistry.Visible = true;
+                
+                ddlMinistry.Items.Clear();
+                ddlMinistry.Items.Add( new ListItem( string.Empty, string.Empty ) );
+                
+                foreach ( var ministry in new ReservationMinistryService( rockContext ).Queryable().AsNoTracking().Where( m => m.ReservationTypeId == ReservationType.Id ).OrderBy( m => m.Name ).ToList() )
+                {
+                    ddlMinistry.Items.Add( new ListItem( ministry.Name, ministry.Id.ToString().ToUpper() ) );
+                }
             }
 
             LoadAdditionalInfo( resetReservationControls: true );
@@ -2752,7 +2772,29 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             lSetupTime.Text = reservation.SetupTime.HasValue ? String.Format( "{0} min", reservation.SetupTime ) : "N/A";
             lCleanupTime.Text = reservation.CleanupTime.HasValue ? String.Format( "{0} min", reservation.CleanupTime ) : "N/A";
             lCampus.Text = reservation.Campus != null ? reservation.Campus.Name : string.Empty;
-            lMinistry.Text = reservation.ReservationMinistry != null ? reservation.ReservationMinistry.Name : string.Empty;
+            
+            // Display ministry name - prefer DefinedValue if available
+            string ministryName = string.Empty;
+            if ( reservation.ReservationMinistry != null )
+            {
+                // Load DefinedValue if not already loaded
+                if ( reservation.ReservationMinistry.DefinedValueId.HasValue && reservation.ReservationMinistry.DefinedValue == null )
+                {
+                    var rockContext = new RockContext();
+                    reservation.ReservationMinistry.DefinedValue = new DefinedValueService( rockContext ).Get( reservation.ReservationMinistry.DefinedValueId.Value );
+                }
+                
+                if ( reservation.ReservationMinistry.DefinedValueId.HasValue && reservation.ReservationMinistry.DefinedValue != null )
+                {
+                    ministryName = reservation.ReservationMinistry.DefinedValue.Value;
+                }
+                else
+                {
+                    ministryName = reservation.ReservationMinistry.Name;
+                }
+            }
+            lMinistry.Text = ministryName;
+            
             lReservationType.Text = ReservationType.Name;
             lSchedule.Text = reservation.GetFriendlyReservationScheduleText();
             lEventContact.Text = String.Format( "<a href='/Person/{0}'>{1}</a><br>{2}<br>{3}",
@@ -2969,14 +3011,38 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                 }
                 ddlCampus.SetValue( reservation.CampusId );
 
-                ddlMinistry.Items.Clear();
-                ddlMinistry.Items.Add( new ListItem( string.Empty, string.Empty ) );
-
-                foreach ( var ministry in new ReservationMinistryService( rockContext ).Queryable().AsNoTracking().Where( m => m.ReservationTypeId == ReservationType.Id ).OrderBy( m => m.Name ).ToList() )
+                // Handle ministry based on whether ReservationType uses DefinedType
+                if ( ReservationType != null && ReservationType.MinistryDefinedTypeId.HasValue )
                 {
-                    ddlMinistry.Items.Add( new ListItem( ministry.Name, ministry.Id.ToString().ToUpper() ) );
+                    dvpMinistry.DefinedTypeId = ReservationType.MinistryDefinedTypeId.Value;
+                    dvpMinistry.Visible = true;
+                    ddlMinistry.Visible = false;
+                    
+                    // Set the ministry value if reservation has one
+                    if ( reservation.ReservationMinistryId.HasValue )
+                    {
+                        var reservationMinistry = reservationMinistryService.Queryable()
+                            .Include( "DefinedValue" )
+                            .FirstOrDefault( rm => rm.Id == reservation.ReservationMinistryId.Value );
+                        if ( reservationMinistry != null && reservationMinistry.DefinedValueId.HasValue )
+                        {
+                            dvpMinistry.SetValue( reservationMinistry.DefinedValueId.Value );
+                        }
+                    }
                 }
-                ddlMinistry.SetValue( reservation.ReservationMinistryId );
+                else
+                {
+                    dvpMinistry.Visible = false;
+                    ddlMinistry.Visible = true;
+                    ddlMinistry.Items.Clear();
+                    ddlMinistry.Items.Add( new ListItem( string.Empty, string.Empty ) );
+
+                    foreach ( var ministry in new ReservationMinistryService( rockContext ).Queryable().AsNoTracking().Where( m => m.ReservationTypeId == ReservationType.Id ).OrderBy( m => m.Name ).ToList() )
+                    {
+                        ddlMinistry.Items.Add( new ListItem( ministry.Name, ministry.Id.ToString().ToUpper() ) );
+                    }
+                    ddlMinistry.SetValue( reservation.ReservationMinistryId );
+                }
 
                 ddlReservationType.Items.Clear();
                 foreach ( var reservationType in new ReservationTypeService( rockContext ).Queryable().AsNoTracking().Where( m => m.IsActive ).OrderBy( m => m.Name ).ToList() )
@@ -3045,6 +3111,55 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                     newReservation.Id,
                     changes );
             }
+        }
+
+        /// <summary>
+        /// Gets the reservation ministry identifier from either DefinedValuePicker or dropdown.
+        /// </summary>
+        /// <returns>The reservation ministry ID, or null if none selected.</returns>
+        private int? GetReservationMinistryId()
+        {
+            var rockContext = new RockContext();
+            var reservationMinistryService = new ReservationMinistryService( rockContext );
+            
+            // If using DefinedValuePicker (new approach)
+            if ( ReservationType != null && ReservationType.MinistryDefinedTypeId.HasValue && dvpMinistry.Visible )
+            {
+                var definedValueId = dvpMinistry.SelectedValueAsId();
+                if ( definedValueId.HasValue )
+                {
+                    // Find or create a ReservationMinistry that references this DefinedValue
+                    var reservationMinistry = reservationMinistryService.Queryable()
+                        .FirstOrDefault( m => m.ReservationTypeId == ReservationType.Id && m.DefinedValueId == definedValueId.Value );
+                    
+                    if ( reservationMinistry == null )
+                    {
+                        // Create a new ReservationMinistry for this DefinedValue
+                        var definedValue = new DefinedValueService( rockContext ).Get( definedValueId.Value );
+                        if ( definedValue != null )
+                        {
+                            reservationMinistry = new ReservationMinistry
+                            {
+                                ReservationTypeId = ReservationType.Id,
+                                DefinedValueId = definedValueId.Value,
+                                Name = definedValue.Value, // Keep Name for backward compatibility
+                                IsActive = true
+                            };
+                            reservationMinistryService.Add( reservationMinistry );
+                            rockContext.SaveChanges();
+                        }
+                    }
+                    
+                    return reservationMinistry?.Id;
+                }
+            }
+            else if ( ddlMinistry.Visible )
+            {
+                // Fall back to old dropdown approach
+                return ddlMinistry.SelectedValueAsId();
+            }
+            
+            return null;
         }
 
         /// <summary>

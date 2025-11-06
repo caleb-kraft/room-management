@@ -1,4 +1,4 @@
-﻿// <copyright>
+// <copyright>
 // Copyright by BEMA Software Services
 //
 // Licensed under the Rock Community License (the "License");
@@ -48,6 +48,13 @@ namespace com.bemaservices.RoomManagement.Model
         public string Name { get; set; }
 
         /// <summary>
+        /// Gets or sets the defined value identifier.
+        /// </summary>
+        /// <value>The defined value identifier.</value>
+        [DataMember]
+        public int? DefinedValueId { get; set; }
+
+        /// <summary>
         /// Gets or sets the description.
         /// </summary>
         /// <value>The description.</value>
@@ -87,6 +94,13 @@ namespace com.bemaservices.RoomManagement.Model
         [DataMember]
         public virtual ReservationType ReservationType { get; set; }
 
+        /// <summary>
+        /// Gets or sets the defined value.
+        /// </summary>
+        /// <value>The defined value.</value>
+        [DataMember]
+        public virtual DefinedValue DefinedValue { get; set; }
+
         #endregion
 
     }
@@ -105,6 +119,7 @@ namespace com.bemaservices.RoomManagement.Model
         public ReservationMinistryConfiguration()
         {
             this.HasRequired( p => p.ReservationType ).WithMany( p => p.ReservationMinistries ).HasForeignKey( p => p.ReservationTypeId ).WillCascadeOnDelete( true );
+            this.HasOptional( p => p.DefinedValue ).WithMany().HasForeignKey( p => p.DefinedValueId ).WillCascadeOnDelete( false );
 
             // IMPORTANT!!
             this.HasEntitySetName( "ReservationMinistry" );

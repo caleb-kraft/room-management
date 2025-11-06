@@ -1,4 +1,4 @@
-﻿// <copyright>
+// <copyright>
 // Copyright by BEMA Software Services
 //
 // Licensed under the Rock Community License (the "License");
@@ -66,12 +66,13 @@ namespace com.bemaservices.RoomManagement.Model
         {
             target.Id = source.Id;
             target.ForeignGuid = source.ForeignGuid;
-            target.ForeignKey = source.ForeignKey;
             target.ReservationTypeId = source.ReservationTypeId;
             target.Name = source.Name;
+            target.DefinedValueId = source.DefinedValueId;
             target.Description = source.Description;
             target.Order = source.Order;
             target.IsActive = source.IsActive;
+            target.ForeignKey = source.ForeignKey;
             target.CreatedDateTime = source.CreatedDateTime;
             target.ModifiedDateTime = source.ModifiedDateTime;
             target.CreatedByPersonAliasId = source.CreatedByPersonAliasId;

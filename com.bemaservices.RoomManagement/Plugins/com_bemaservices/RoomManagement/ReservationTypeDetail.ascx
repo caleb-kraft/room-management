@@ -122,10 +122,11 @@
                     </Rock:PanelWidget>
 
                     <Rock:PanelWidget ID="wpMinistries" runat="server" Title="Ministries">
+                        <Rock:DefinedTypePicker ID="dtpMinistryDefinedType" runat="server" Label="Ministry Defined Type" Help="Select a Defined Type that contains the ministry options available for this reservation type. If not specified, ministries will be manually entered." />
                         <div class="grid">
                             <Rock:Grid ID="gMinistries" runat="server" AllowPaging="false" DisplayType="Light" RowItemText="Ministry" ShowConfirmDeleteDialog="false">
                                 <Columns>
-                                    <Rock:RockBoundField DataField="Name" HeaderText="Ministries" />
+                                    <Rock:RockBoundField DataField="MinistryName" HeaderText="Ministries" />
                                     <Rock:EditField OnClick="gMinistries_Edit" />
                                     <Rock:DeleteField OnClick="gMinistries_Delete" />
                                 </Columns>
@@ -181,7 +182,7 @@
         <Rock:ModalDialog ID="dlgMinistries" runat="server" ScrollbarEnabled="false" SaveButtonText="Add" OnSaveClick="btnAddMinistry_Click" Title="Add Ministry" ValidationGroup="Ministry">
             <Content>
                 <asp:HiddenField ID="hfAddMinistryGuid" runat="server" />
-                <Rock:DataTextBox ID="tbMinistryName" SourceTypeName="com.bemaservices.RoomManagement.Model.ReservationMinistry, com.bemaservices.RoomManagement" PropertyName="Name" Label="Ministry Name" runat="server" ValidationGroup="Ministry" />
+                <Rock:DefinedValuePicker ID="dvpMinistry" runat="server" Required="true" Label="Ministry" ValidationGroup="Ministry" />
             </Content>
         </Rock:ModalDialog>
 

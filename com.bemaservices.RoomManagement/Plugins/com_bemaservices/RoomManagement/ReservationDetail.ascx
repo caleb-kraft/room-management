@@ -257,7 +257,7 @@ div[id$="_upnlContent"].modal-open:has(div.picker-menu[style*="display: block"])
                                 </div>
 
                                 <Rock:RockDropDownList ID="ddlCampus" runat="server" Label="Campus" OnSelectedIndexChanged="ddlCampus_SelectedIndexChanged" AutoPostBack="true" />
-                                <Rock:RockDropDownList ID="ddlMinistry" runat="server" Label="Ministry" Required="false" />
+                                <Rock:DefinedValuePicker ID="dvpMinistry" runat="server" Label="Ministry" Required="false" />
 
                                 <div class="row">
                                     <div class="col-md-6">

@@ -133,6 +133,13 @@ namespace com.bemaservices.RoomManagement.Model
         public int? ContactPhoneTypeValueId { get; set; }
 
         /// <summary>
+        /// Gets or sets the ministry defined type identifier.
+        /// </summary>
+        /// <value>The ministry defined type identifier.</value>
+        [DataMember]
+        public int? MinistryDefinedTypeId { get; set; }
+
+        /// <summary>
         /// Gets or sets the maximum duration of the reservation.
         /// </summary>
         /// <value>The maximum duration of the reservation.</value>
@@ -183,6 +190,12 @@ namespace com.bemaservices.RoomManagement.Model
         /// </summary>
         /// <value>The contact phone type value.</value>
         public DefinedValue ContactPhoneTypeValue { get; set; }
+
+        /// <summary>
+        /// Gets or sets the ministry defined type.
+        /// </summary>
+        /// <value>The ministry defined type.</value>
+        public virtual DefinedType MinistryDefinedType { get; set; }
 
         /// <summary>
         /// Gets or sets the final approval group identifier.
@@ -492,6 +505,7 @@ namespace com.bemaservices.RoomManagement.Model
         public ReservationTypeConfiguration()
         {
             this.HasOptional( p => p.ContactPhoneTypeValue ).WithMany().HasForeignKey( p => p.ContactPhoneTypeValueId ).WillCascadeOnDelete( false );
+            this.HasOptional( p => p.MinistryDefinedType ).WithMany().HasForeignKey( p => p.MinistryDefinedTypeId ).WillCascadeOnDelete( false );
 
             // IMPORTANT!!
             this.HasEntitySetName( "ReservationType" );
