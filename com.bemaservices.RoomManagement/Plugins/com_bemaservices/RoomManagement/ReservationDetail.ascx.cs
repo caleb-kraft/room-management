@@ -1,4 +1,4 @@
-﻿// <copyright>
+// <copyright>
 // Copyright by BEMA Software Services
 //
 // Licensed under the Rock Community License (the "License");
@@ -412,6 +412,186 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                     nbEditModeMessage.Text = "This reservation has been modified since it was last opened. Please refresh the page to modify the reservation.";
                     nbEditModeMessage.Visible = true;
                     return;
+                }
+
+                // Check if we're editing a single occurrence
+                DateTime? occurrenceDateTime = null;
+                if ( !string.IsNullOrWhiteSpace( hfOccurrenceDateTime.Value ) )
+                {
+                    DateTime parsedDateTime;
+                    if ( DateTime.TryParse( hfOccurrenceDateTime.Value, out parsedDateTime ) )
+                    {
+                        occurrenceDateTime = parsedDateTime;
+                    }
+                }
+
+                // If editing a single occurrence, handle it differently
+                if ( occurrenceDateTime.HasValue && reservation != null && reservation.Id > 0 )
+                {
+                    // Verify this is a recurring reservation
+                    var calEvent = InetCalendarHelper.CreateCalendarEvent( reservation.Schedule?.iCalendarContent ?? "" );
+                    var isRecurring = calEvent != null && ( ( calEvent.RecurrenceRules?.Any() == true ) || ( calEvent.RecurrenceDates?.Any() == true ) );
+
+                    if ( isRecurring )
+                    {
+                        // Build the modified reservation from the form data
+                        var modifiedReservation = new Reservation
+                        {
+                            ReservationTypeId = ReservationType.Id,
+                            Name = rtbName.Text,
+                            CampusId = ddlCampus.SelectedValueAsId(),
+                            ReservationMinistryId = ddlMinistry.SelectedValueAsId(),
+                            ApprovalState = reservation.ApprovalState,
+                            RequesterAliasId = reservation.RequesterAliasId,
+                            SetupTime = nbSetupTime.Text.AsIntegerOrNull(),
+                            CleanupTime = nbCleanupTime.Text.AsIntegerOrNull(),
+                            NumberAttending = nbAttending.Text.AsIntegerOrNull(),
+                            Note = rtbNote.Text,
+                            SetupPhotoId = fuSetupPhoto.BinaryFileId,
+                            EventContactPersonAliasId = ppEventContact.PersonAliasId,
+                            EventContactPhone = PhoneNumber.FormattedNumber( PhoneNumber.DefaultCountryCode(), pnEventContactPhone.Number ),
+                            EventContactEmail = tbEventContactEmail.Text,
+                            AdministrativeContactPersonAliasId = ppAdministrativeContact.PersonAliasId,
+                            AdministrativeContactPhone = PhoneNumber.FormattedNumber( PhoneNumber.DefaultCountryCode(), pnAdministrativeContactPhone.Number ),
+                            AdministrativeContactEmail = tbAdministrativeContactEmail.Text
+                        };
+
+                        // Copy locations
+                        modifiedReservation.ReservationLocations = new List<ReservationLocation>();
+                        foreach ( var locationState in LocationsState )
+                        {
+                            var location = new ReservationLocation
+                            {
+                                LocationId = locationState.LocationId,
+                                LocationLayoutId = locationState.LocationLayoutId,
+                                ApprovalState = locationState.ApprovalState
+                            };
+                            modifiedReservation.ReservationLocations.Add( location );
+                        }
+
+                        // Copy resources
+                        modifiedReservation.ReservationResources = new List<ReservationResource>();
+                        foreach ( var resourceState in ResourcesState )
+                        {
+                            var resource = new ReservationResource
+                            {
+                                ResourceId = resourceState.ResourceId,
+                                Quantity = resourceState.Quantity,
+                                ApprovalState = resourceState.ApprovalState
+                            };
+                            modifiedReservation.ReservationResources.Add( resource );
+                        }
+
+                        // Copy door lock schedules
+                        modifiedReservation.ReservationDoorLockSchedules = new List<ReservationDoorLockSchedule>();
+                        foreach ( var doorLockScheduleState in DoorLockSchedulesState )
+                        {
+                            var doorLockSchedule = new ReservationDoorLockSchedule();
+                            doorLockSchedule.CopyPropertiesFrom( doorLockScheduleState );
+                            modifiedReservation.ReservationDoorLockSchedules.Add( doorLockSchedule );
+                        }
+
+                        // Handle schedule if modified
+                        if ( sbSchedule.iCalendarContent != null )
+                        {
+                            var schedule = ReservationService.BuildScheduleFromICalContent( sbSchedule.iCalendarContent );
+                            var scheduleErrorMessage = String.Empty;
+                            var newSchedule = ReservationService.UpdateScheduleWithMaxEndDate( schedule, reservationType, out scheduleErrorMessage );
+                            if ( scheduleErrorMessage.IsNotNullOrWhiteSpace() )
+                            {
+                                nbEditModeMessage.Title = "Warning";
+                                nbEditModeMessage.Text = scheduleErrorMessage;
+                                nbEditModeMessage.Visible = true;
+                                return;
+                            }
+                            // Note: For single occurrence editing, we'll create a one-time schedule, so we don't use the modified schedule here
+                        }
+
+                        try
+                        {
+                            // Use EditSingleOccurrence to handle the single occurrence edit
+                            var newReservation = reservationService.EditSingleOccurrence( reservation, occurrenceDateTime.Value, modifiedReservation, rockContext );
+
+                            if ( newReservation == null )
+                            {
+                                nbError.Text = "The specified occurrence does not exist in the recurring reservation.";
+                                nbError.Visible = true;
+                                return;
+                            }
+
+                            // Save changes
+                            rockContext.SaveChanges();
+
+                            // Load attributes for the new reservation
+                            newReservation.LoadAttributes( rockContext );
+                            modifiedReservation.LoadAttributes( rockContext );
+                            Rock.Attribute.Helper.GetEditValues( phAttributeEdits, modifiedReservation );
+                            Rock.Attribute.Helper.SaveAttributeValues( modifiedReservation, newReservation, rockContext );
+
+                            // Save location attributes
+                            foreach ( var locationState in LocationsState )
+                            {
+                                var newLocation = newReservation.ReservationLocations.FirstOrDefault( rl => rl.LocationId == locationState.LocationId );
+                                if ( newLocation != null )
+                                {
+                                    var headControl = phLocationAnswers.FindControl( "cReservationLocation_" + locationState.Guid.ToString() ) as Control;
+                                    if ( headControl != null )
+                                    {
+                                        var phAttributes = headControl.FindControl( "phAttributes_" + locationState.Guid.ToString() ) as PlaceHolder;
+                                        if ( phAttributes != null )
+                                        {
+                                            newLocation.LoadReservationLocationAttributes();
+                                            Rock.Attribute.Helper.GetEditValues( phAttributes, locationState );
+                                            Rock.Attribute.Helper.SaveAttributeValues( locationState, newLocation, rockContext );
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Save resource attributes
+                            foreach ( var resourceState in ResourcesState )
+                            {
+                                var newResource = newReservation.ReservationResources.FirstOrDefault( rr => rr.ResourceId == resourceState.ResourceId );
+                                if ( newResource != null )
+                                {
+                                    var headControl = phResourceAnswers.FindControl( "cReservationResource_" + resourceState.Guid.ToString() ) as Control;
+                                    if ( headControl != null )
+                                    {
+                                        var phAttributes = headControl.FindControl( "phAttributes_" + resourceState.Guid.ToString() ) as PlaceHolder;
+                                        if ( phAttributes != null )
+                                        {
+                                            newResource.LoadReservationResourceAttributes();
+                                            GetResourceEditValues( phAttributes, resourceState );
+                                            Rock.Attribute.Helper.SaveAttributeValues( resourceState, newResource, rockContext );
+                                        }
+                                    }
+                                }
+                            }
+
+                            rockContext.SaveChanges();
+
+                            // Show success message and redirect to the new reservation
+                            nbEditModeMessage.NotificationBoxType = Rock.Web.UI.Controls.NotificationBoxType.Success;
+                            nbEditModeMessage.Title = "Occurrence Edited Successfully";
+                            nbEditModeMessage.Text = string.Format( 
+                                "The occurrence on {0} has been edited. A new reservation has been created for this occurrence. <a href='{1}?ReservationId={2}' class='btn btn-sm btn-primary'>View New Reservation</a>", 
+                                occurrenceDateTime.Value.ToString( "g" ),
+                                this.CurrentPageReference.BuildUrl(),
+                                newReservation.Id );
+                            nbEditModeMessage.Visible = true;
+
+                            // Refresh the view to show the original reservation
+                            ShowDetail( reservation.Id );
+                            return;
+                        }
+                        catch ( Exception ex )
+                        {
+                            ExceptionLogService.LogException( ex );
+                            nbError.Text = "An error occurred while editing the single occurrence: " + ex.Message;
+                            nbError.Visible = true;
+                            return;
+                        }
+                    }
                 }
 
                 if ( reservation == null )
@@ -2295,6 +2475,31 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
 
                 hfReservationId.Value = reservationId.ToString();
                 pdAuditDetails.SetEntity( reservation, ResolveRockUrl( "~" ) );
+
+                // Check if we're editing a single occurrence
+                var occurrenceDateTimeParam = PageParameter( "OccurrenceDateTime" );
+                if ( !string.IsNullOrWhiteSpace( occurrenceDateTimeParam ) )
+                {
+                    DateTime occurrenceDateTime;
+                    if ( DateTime.TryParse( occurrenceDateTimeParam, out occurrenceDateTime ) )
+                    {
+                        hfOccurrenceDateTime.Value = occurrenceDateTime.ToString( "O" ); // ISO 8601 format
+
+                        // Verify this is a recurring reservation
+                        var calEvent = InetCalendarHelper.CreateCalendarEvent( reservation.Schedule?.iCalendarContent ?? "" );
+                        var isRecurring = calEvent != null && ( ( calEvent.RecurrenceRules?.Any() == true ) || ( calEvent.RecurrenceDates?.Any() == true ) );
+
+                        if ( isRecurring )
+                        {
+                            // Show warning that we're editing a single occurrence
+                            nbSingleOccurrenceWarning.Visible = true;
+                            nbSingleOccurrenceWarning.Title = "Editing Single Occurrence";
+                            nbSingleOccurrenceWarning.Text = string.Format( 
+                                "You are editing only the occurrence on <strong>{0}</strong>. This will create a separate reservation for this occurrence while keeping the original recurring series unchanged for all other dates.", 
+                                occurrenceDateTime.ToString( "g" ) );
+                        }
+                    }
+                }
 
                 // Check to make sure there's no conflicts
                 var warningInfo = reservationService.GenerateConflictInfo( reservation, this.CurrentPageReference.Route, true );
