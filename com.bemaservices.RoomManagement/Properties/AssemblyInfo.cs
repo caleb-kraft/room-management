@@ -21,12 +21,12 @@ using System.Runtime.InteropServices;
 // General Information about an assembly is controlled through the following 
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
-[assembly: AssemblyTitle("com.bemaservices.RoomManagement")]
-[assembly: AssemblyDescription("")]
+[assembly: AssemblyTitle("Calendar Management")]
+[assembly: AssemblyDescription("Internal Calendar Management Plugin")]
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany( "BEMA Software Services (BEMASoftwareServices.com)" )]
 [assembly: AssemblyCopyright( "Copyright © BEMA Software Services 2020" )]
-[assembly: AssemblyProduct("com.bemaservices.RoomManagement")]
+[assembly: AssemblyProduct("Calendar Management")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]
 
@@ -48,5 +48,5 @@ using System.Runtime.InteropServices;
 // You can specify all the values or you can default the Build and Revision Numbers 
 // by using the '*' as shown below:
 // [assembly: AssemblyVersion("1.0.*")]
-[assembly: AssemblyVersion("2.6.4.16")]
-[assembly: AssemblyFileVersion("2.6.4.16")]
+[assembly: AssemblyVersion("2.7.0.0")]
+[assembly: AssemblyFileVersion("2.7.0.0")]
