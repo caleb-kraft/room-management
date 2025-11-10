@@ -1,4 +1,4 @@
-﻿// <copyright>
+// <copyright>
 // Copyright by BEMA Software Services
 //
 // Licensed under the Rock Community License (the "License");
@@ -179,17 +179,10 @@ namespace com.bemaservices.RoomManagement.Workflow.Actions.Reservations
                     HistoryService.SaveChanges( rockContext, typeof( Reservation ), com.bemaservices.RoomManagement.SystemGuid.Category.HISTORY_RESERVATION_CHANGES.AsGuid(), reservation.Id, changes, false );
                 }
 
-
-                if ( reservation != null )
-                {
-                    SetWorkflowAttributeValue( action, attribute.Guid, reservation.Guid.ToString() );
-                    action.AddLogEntry( string.Format( "Set '{0}' attribute to '{1}'.", attribute.Name, reservation.Name ) );
-                    return true;
-                }
-                else
-                {
-                    errorMessages.Add( "Reservation could not be determined!" );
-                }
+                // Reservation should always be available after SaveChanges succeeds
+                SetWorkflowAttributeValue( action, attribute.Guid, reservation.Guid.ToString() );
+                action.AddLogEntry( string.Format( "Set '{0}' attribute to '{1}'.", attribute.Name, reservation.Name ) );
+                return true;
             }
             else
             {
