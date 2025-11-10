@@ -1,4 +1,4 @@
-﻿// <copyright>
+// <copyright>
 // Copyright by BEMA Software Services
 //
 // Licensed under the Rock Community License (the "License");
@@ -107,22 +107,30 @@ namespace com.bemaservices.RoomManagement.Workflow.Actions.Reservations
 
                 if ( approvalGroupType == null )
                 {
-                    errorMessages.Add( "Invalid Approval State Attribute or Value!" );
+                    errorMessages.Add( "Invalid Approval Group Type Attribute or Value!" );
                     return false;
                 }
 
-                // Get Campus
+                // Get Campus (optional)
                 Campus campus = null;
                 var campusService = new CampusService( rockContext );
                 Guid? campusAttributeGuid = GetAttributeValue( action, "CampusAttribute" ).AsGuidOrNull();
                 if ( campusAttributeGuid.HasValue )
                 {
-                    campus = campusService.Get( action.GetWorkflowAttributeValue( campusAttributeGuid.Value ).AsGuid() );
+                    var campusGuid = action.GetWorkflowAttributeValue( campusAttributeGuid.Value ).AsGuidOrNull();
+                    if ( campusGuid.HasValue )
+                    {
+                        campus = campusService.Get( campusGuid.Value );
+                    }
                 }
 
                 if ( campus == null )
                 {
-                    campus = campusService.Get( GetAttributeValue( action, "Campus" ).AsGuid() );
+                    var campusGuid = GetAttributeValue( action, "Campus" ).AsGuidOrNull();
+                    if ( campusGuid.HasValue )
+                    {
+                        campus = campusService.Get( campusGuid.Value );
+                    }
                 }
 
                 Group group = null;
@@ -142,7 +150,12 @@ namespace com.bemaservices.RoomManagement.Workflow.Actions.Reservations
                     approvalGroupQry = approvalGroupQry.Where( ag => ag.CampusId == null );
                 }
 
-                var approvalGroup = approvalGroupQry.OrderBy( a => a.ApprovalGroupType ).ThenBy( a => a.CampusId.HasValue ).ThenBy( a => a.Campus.Name ).FirstOrDefault();
+                // Order by: ApprovalGroupType, then by whether campus is specified (nulls last), then by campus name (nulls last)
+                var approvalGroup = approvalGroupQry
+                    .OrderBy( a => a.ApprovalGroupType )
+                    .ThenBy( a => a.CampusId.HasValue ? 0 : 1 ) // Campus-specified groups first
+                    .ThenBy( a => a.Campus != null ? a.Campus.Name : string.Empty )
+                    .FirstOrDefault();
 
                 if ( approvalGroup != null )
                 {

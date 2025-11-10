@@ -1,4 +1,4 @@
-﻿// <copyright>
+// <copyright>
 // Copyright by BEMA Software Services
 //
 // Licensed under the Rock Community License (the "License");
@@ -100,13 +100,14 @@ namespace com.bemaservices.RoomManagement.Workflow.Actions.Reservations
                     oldValue.ToString(),
                     reservation.ApprovalState.ToString() );
 
+                // Save reservation changes first to ensure reservation.Id is available for history tracking
+                rockContext.SaveChanges();
+
                 if ( changes.Any() )
                 {
                     changes.Add( new History.HistoryChange( History.HistoryVerb.Modify, History.HistoryChangeType.Record, string.Format( "Updated by the '{0}' workflow", action.ActionTypeCache.ActivityType.WorkflowType.Name ) ) );
                     HistoryService.SaveChanges( rockContext, typeof( Reservation ), com.bemaservices.RoomManagement.SystemGuid.Category.HISTORY_RESERVATION_CHANGES.AsGuid(), reservation.Id, changes, false );
                 }
-
-                rockContext.SaveChanges();
 
                 if ( action.Activity != null && action.Activity.Workflow != null )
                 {

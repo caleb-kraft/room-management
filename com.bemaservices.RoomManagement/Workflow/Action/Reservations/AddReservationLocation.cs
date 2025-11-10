@@ -1,4 +1,4 @@
-﻿// <copyright>
+// <copyright>
 // Copyright by BEMA Software Services
 //
 // Licensed under the Rock Community License (the "License");
@@ -71,8 +71,16 @@ namespace com.bemaservices.RoomManagement.Workflow.Actions.Reservations
 
             // Get the location
             Location location = null;
-            Guid locationGuid = action.GetWorkflowAttributeValue( GetAttributeValue( action, "LocationAttribute" ).AsGuid() ).AsGuid();
-            location = new LocationService( rockContext ).Get( locationGuid );
+            var locationAttributeGuid = GetAttributeValue( action, "LocationAttribute" ).AsGuidOrNull();
+            if ( locationAttributeGuid.HasValue )
+            {
+                var locationGuid = action.GetWorkflowAttributeValue( locationAttributeGuid.Value ).AsGuidOrNull();
+                if ( locationGuid.HasValue && locationGuid.Value != Guid.Empty )
+                {
+                    location = new LocationService( rockContext ).Get( locationGuid.Value );
+                }
+            }
+            
             if ( location == null )
             {
                 errorMessages.Add( "Invalid Location Attribute or Value!" );
@@ -111,13 +119,14 @@ namespace com.bemaservices.RoomManagement.Workflow.Actions.Reservations
                     reservation.ApprovalState.ToString() );
             }
 
+            // Save reservation changes first to ensure reservation.Id and related entities are persisted
+            rockContext.SaveChanges();
+
             if ( changes.Any() )
             {
                 changes.Add( new History.HistoryChange( History.HistoryVerb.Modify, History.HistoryChangeType.Record, string.Format( "Updated by the '{0}' workflow", action.ActionTypeCache.ActivityType.WorkflowType.Name ) ) );
                 HistoryService.SaveChanges( rockContext, typeof( Reservation ), com.bemaservices.RoomManagement.SystemGuid.Category.HISTORY_RESERVATION_CHANGES.AsGuid(), reservation.Id, changes, false );
             }
-
-            rockContext.SaveChanges();
 
             return true;
         }
