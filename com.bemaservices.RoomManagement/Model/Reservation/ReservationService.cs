@@ -1460,6 +1460,32 @@ namespace com.bemaservices.RoomManagement.Model
                 }
             }
 
+            // Copy door lock schedules from modified reservation, or fall back to original
+            if ( modifiedReservation.ReservationDoorLockSchedules?.Any() == true )
+            {
+                foreach ( var doorLockSchedule in modifiedReservation.ReservationDoorLockSchedules )
+                {
+                    var newDoorLockSchedule = new ReservationDoorLockSchedule();
+                    newDoorLockSchedule.CopyPropertiesFrom( doorLockSchedule );
+                    newDoorLockSchedule.Id = 0; // Reset Id for new entity
+                    newDoorLockSchedule.Guid = Guid.NewGuid(); // Generate new Guid
+                    newDoorLockSchedule.ReservationId = 0; // Will be set when reservation is saved
+                    newReservation.ReservationDoorLockSchedules.Add( newDoorLockSchedule );
+                }
+            }
+            else if ( originalReservation.ReservationDoorLockSchedules?.Any() == true )
+            {
+                foreach ( var doorLockSchedule in originalReservation.ReservationDoorLockSchedules )
+                {
+                    var newDoorLockSchedule = new ReservationDoorLockSchedule();
+                    newDoorLockSchedule.CopyPropertiesFrom( doorLockSchedule );
+                    newDoorLockSchedule.Id = 0; // Reset Id for new entity
+                    newDoorLockSchedule.Guid = Guid.NewGuid(); // Generate new Guid
+                    newDoorLockSchedule.ReservationId = 0; // Will be set when reservation is saved
+                    newReservation.ReservationDoorLockSchedules.Add( newDoorLockSchedule );
+                }
+            }
+
             // Set first/last occurrence dates for the new reservation
             newReservation = SetFirstLastOccurrenceDateTimes( newReservation );
 
