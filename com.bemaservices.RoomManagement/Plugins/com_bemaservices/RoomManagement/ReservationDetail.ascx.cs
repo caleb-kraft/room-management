@@ -491,6 +491,9 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                             modifiedReservation.ReservationDoorLockSchedules.Add( doorLockSchedule );
                         }
 
+                        // Get reservation type
+                        var reservationType = new ReservationTypeService( rockContext ).Get( ReservationType.Id );
+
                         // Handle schedule if modified
                         if ( sbSchedule.iCalendarContent != null )
                         {

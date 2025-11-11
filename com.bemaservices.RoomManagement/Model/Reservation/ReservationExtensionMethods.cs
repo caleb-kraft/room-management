@@ -22,6 +22,7 @@ using System.Linq;
 using System.Reflection;
 using Rock;
 using Rock.Data;
+using Rock.Model;
 using com.bemaservices.RoomManagement.Utility.RockInternalMethods;
 using Ical.Net;
 using Ical.Net.CalendarComponents;

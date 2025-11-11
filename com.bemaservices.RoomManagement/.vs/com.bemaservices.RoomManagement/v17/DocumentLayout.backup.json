@@ -1,0 +1,55 @@
+{
+  "Version": 1,
+  "WorkspaceRootPath": "C:\\Users\\lgazureadmin\\source\\repos\\caleb-kraft\\room-management\\com.bemaservices.RoomManagement\\",
+  "Documents": [
+    {
+      "AbsoluteMoniker": "D:0:0:{E3C37E39-0DAE-4826-B38F-EB6A4D23842F}|com.bemaservices.RoomManagement.csproj|c:\\users\\lgazureadmin\\source\\repos\\caleb-kraft\\room-management\\com.bemaservices.roommanagement\\attribute\\reporttemplatefieldattribute.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{E3C37E39-0DAE-4826-B38F-EB6A4D23842F}|com.bemaservices.RoomManagement.csproj|solutionrelative:attribute\\reporttemplatefieldattribute.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{00000000-0000-0000-0000-000000000000}|\u003CSolution\u003E|com.bemaservices.RoomManagement||{04B8AB82-A572-4FEF-95CE-5222444B6B64}|"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{E3C37E39-0DAE-4826-B38F-EB6A4D23842F}|com.bemaservices.RoomManagement.csproj|c:\\users\\lgazureadmin\\source\\repos\\caleb-kraft\\room-management\\com.bemaservices.roommanagement\\||{B270807C-D8C6-49EB-8EBE-8E8D566637A1}|031911c8-6148-4e25-b1b1-44bca9a0c45c"
+    }
+  ],
+  "DocumentGroupContainers": [
+    {
+      "Orientation": 0,
+      "VerticalTabListWidth": 256,
+      "DocumentGroups": [
+        {
+          "DockedWidth": 200,
+          "SelectedChildIndex": 0,
+          "Children": [
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "ReportTemplateFieldAttribute.cs",
+              "DocumentMoniker": "C:\\Users\\lgazureadmin\\source\\repos\\caleb-kraft\\room-management\\com.bemaservices.RoomManagement\\Attribute\\ReportTemplateFieldAttribute.cs",
+              "RelativeDocumentMoniker": "Attribute\\ReportTemplateFieldAttribute.cs",
+              "ToolTip": "C:\\Users\\lgazureadmin\\source\\repos\\caleb-kraft\\room-management\\com.bemaservices.RoomManagement\\Attribute\\ReportTemplateFieldAttribute.cs",
+              "RelativeToolTip": "Attribute\\ReportTemplateFieldAttribute.cs",
+              "ViewState": "AgIAAAQAAAAAAAAAAAAowA8AAAACAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2025-11-10T22:40:51.784Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 1,
+              "Title": "com.bemaservices.RoomManagement",
+              "DocumentMoniker": "C:\\Users\\lgazureadmin\\source\\repos\\caleb-kraft\\room-management\\com.bemaservices.RoomManagement\\com.bemaservices.RoomManagement.csproj",
+              "RelativeDocumentMoniker": "com.bemaservices.RoomManagement.csproj",
+              "ToolTip": "C:\\Users\\lgazureadmin\\source\\repos\\caleb-kraft\\room-management\\com.bemaservices.RoomManagement\\com.bemaservices.RoomManagement.csproj",
+              "RelativeToolTip": "com.bemaservices.RoomManagement.csproj",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001001|",
+              "WhenOpened": "2025-11-10T22:38:18.186Z",
+              "EditorCaption": ""
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
