@@ -346,7 +346,17 @@ namespace com.bemaservices.RoomManagement.Model
                 qryStartTime = newReservation.FirstOccurrenceStartDateTime.Value;
             }
 
+            // Limit conflict checking to a reasonable range (5 years max) to avoid processing decades of occurrences
+            // Users can check conflicts for specific dates if needed, but we shouldn't check 20+ years on every save
+            var maxConflictCheckEndTime = qryStartTime.AddYears( 5 );
             var qryEndTime = newReservation.LastOccurrenceEndDateTime ?? RockDateTime.Now.AddYears( 1 );
+            
+            // Cap the end time to avoid excessive processing
+            if ( qryEndTime > maxConflictCheckEndTime )
+            {
+                qryEndTime = maxConflictCheckEndTime;
+            }
+            
             var newReservationSummaries = newReservationQry.GetReservationSummaries( qryStartTime, qryEndTime );
             var existingReservationSummaries = filteredExistingReservationQry.GetReservationSummaries( qryStartTime, qryEndTime );
 
@@ -1058,16 +1068,28 @@ namespace com.bemaservices.RoomManagement.Model
             var maxDuration = reservationType.MaximumReservationDuration;
             if ( maxDuration.HasValue && maxDuration > 0 )
             {
-                var scheduledStartTimesOverMax = schedule.GetScheduledStartTimes( DateTime.Now.AddDays( maxDuration.Value ), DateTime.Now.AddDays( maxDuration.Value + 366 ) );
+                var maxEndDate = DateTime.Now.AddDays( maxDuration.Value );
+                
+                // Check EffectiveEndDate first to avoid expensive GetScheduledStartTimes call if not needed
+                bool exceedsMaxDuration = schedule.EffectiveEndDate.HasValue && schedule.EffectiveEndDate > maxEndDate;
+                
+                // Only call GetScheduledStartTimes if EffectiveEndDate check didn't already determine it exceeds
+                if ( !exceedsMaxDuration )
+                {
+                    var scheduledStartTimesOverMax = schedule.GetScheduledStartTimes( maxEndDate, maxEndDate.AddDays( 366 ) );
+                    exceedsMaxDuration = scheduledStartTimesOverMax != null && scheduledStartTimesOverMax.Any();
+                }
 
-                if ( ( maxDuration > 0 && scheduledStartTimesOverMax != null && scheduledStartTimesOverMax.Count() > 0 ) || schedule.EffectiveEndDate > DateTime.Now.AddDays( maxDuration.Value ) )
+                if ( exceedsMaxDuration )
                 {
                     var icalEvent = schedule.GetICalEvent();
 
                     var countRules = icalEvent.RecurrenceRules.Where( rule => rule.Count > 0 );
                     if ( countRules.Any() )
                     {
-                        var scheduledStartTimesWithinMax = schedule.GetScheduledStartTimes( DateTime.Now, DateTime.Now.AddDays( maxDuration.Value ) );
+                        // Limit the range to avoid processing too many occurrences - cap at 10 years max
+                        var maxRangeDays = Math.Min( maxDuration.Value, 3650 ); // 10 years max
+                        var scheduledStartTimesWithinMax = schedule.GetScheduledStartTimes( DateTime.Now, DateTime.Now.AddDays( maxRangeDays ) );
                         icalEvent.RecurrenceRules.FirstOrDefault().Count = scheduledStartTimesWithinMax.Count;
 
                         scheduleErrorMessage = "Reservations can only be submitted for " + maxDuration.ToString() + " days.  The recurrence has been adjusted accordingly.";
@@ -1103,8 +1125,8 @@ namespace com.bemaservices.RoomManagement.Model
         /// <returns>Reservation.</returns>
         public Reservation SetFirstLastOccurrenceDateTimes( Reservation reservation )
         {
-
-            var beginDateTime = DateTime.MinValue;
+            // Start from the schedule's actual start date, not DateTime.MinValue (year 1) to avoid processing thousands of years
+            var beginDateTime = reservation.Schedule?.FirstStartDateTime ?? RockDateTime.Now;
             var endDateTime = DateTime.MaxValue;
 
             var maximumReservationDate = RockDateTime.Now.AddDays( reservation?.ReservationType?.DefaultReservationDuration ?? 7305 );
@@ -1128,6 +1150,21 @@ namespace com.bemaservices.RoomManagement.Model
                 if ( !calEvent.RecurrenceRules.Any( r => ( r.Until != null && r.Until != DateTime.MinValue ) || ( r.Count != null && r.Count != -2147483648 ) ) )
                 {
                     endDateTime = maximumReservationDate;
+                }
+                else
+                {
+                    // If there's an Until date or Count, use that instead of DateTime.MaxValue to avoid processing infinite occurrences
+                    var untilRule = calEvent.RecurrenceRules.FirstOrDefault( r => r.Until != null && r.Until != DateTime.MinValue );
+                    if ( untilRule != null && untilRule.Until != DateTime.MinValue )
+                    {
+                        endDateTime = untilRule.Until;
+                    }
+                    else
+                    {
+                        // If using Count, limit to a reasonable range to find the last occurrence
+                        // Use maximumReservationDate as a safety limit
+                        endDateTime = maximumReservationDate;
+                    }
                 }
 
                 var occurrences = reservation.GetReservationTimes( beginDateTime, endDateTime ).ToList();
@@ -1653,8 +1690,11 @@ namespace com.bemaservices.RoomManagement.Model
             }
 
             // Find all reservations linked to this one via ForeignKey or ForeignGuid
+            // Use string concatenation instead of string interpolation to avoid Entity Framework translation issues
+            var foreignKeyPrefix = "OriginalReservation_";
+            var foreignKeyValue = foreignKeyPrefix + reservation.Id.ToString();
             return Queryable()
-                .Where( r => r.ForeignKey == $"OriginalReservation_{reservation.Id}" || 
+                .Where( r => r.ForeignKey == foreignKeyValue || 
                            ( r.ForeignGuid.HasValue && r.ForeignGuid == reservation.Guid ) )
                 .OrderBy( r => r.Schedule.EffectiveStartDate );
         }

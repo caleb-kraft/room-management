@@ -408,19 +408,26 @@ div[id$="_upnlContent"].modal-open:has(div.picker-menu[style*="display: block"])
 
         <Rock:ModalDialog ID="dlgReservationResource" runat="server" Title="Select Resource" OnSaveThenAddClick="dlgReservationResource_SaveThenAddClick" OnSaveClick="dlgReservationResource_SaveClick" OnCancelScript="clearActiveDialog();" ValidationGroup="ReservationResource">
             <Content>
-                <asp:HiddenField ID="hfAddReservationResourceGuid" runat="server" />
-                <asp:ValidationSummary ID="valReservationResourceSummary" runat="server" HeaderText="Please Correct the Following" CssClass="alert alert-danger" ValidationGroup="ReservationResource" />
-                <Rock:NotificationBox ID="nbResourceNote" Visible="false" NotificationBoxType="Info" runat="server" />
-                <div class="row">
-                    <div class="col-md-6">
-                        <BEMA:ScheduledResourcePicker ID="srpResource" runat="server" Label="Resource" Required="false" Enabled="false" AllowMultiSelect="false" OnSelectItem="srpResource_SelectItem" ValidationGroup="ReservationResource" />
-                        <Rock:RockDropDownList ID="ddlReservationLocation" runat="server" Label="Location" Required="false" AutoPostBack="true" OnSelectedIndexChanged="ddlReservationLocation_SelectedIndexChanged" />
-                    </div>
-                    <div class="col-md-6">
-                        <Rock:NumberBox ID="nbQuantity" runat="server" NumberType="Integer" MinimumValue="1" ValidationGroup="ReservationResource" Label="Quantity" />
-                        <Rock:NotificationBox ID="nbResourceConflicts" Visible="false" NotificationBoxType="Warning" runat="server" />
-                    </div>
-                </div>
+                <asp:UpdatePanel ID="upnlResourcePicker" runat="server" UpdateMode="Conditional">
+                    <ContentTemplate>
+                        <asp:HiddenField ID="hfAddReservationResourceGuid" runat="server" />
+                        <asp:ValidationSummary ID="valReservationResourceSummary" runat="server" HeaderText="Please Correct the Following" CssClass="alert alert-danger" ValidationGroup="ReservationResource" />
+                        <Rock:NotificationBox ID="nbResourceNote" Visible="false" NotificationBoxType="Info" runat="server" />
+                        <div class="row">
+                            <div class="col-md-6">
+                                <BEMA:ScheduledResourcePicker ID="srpResource" runat="server" Label="Resource" Required="false" Enabled="false" AllowMultiSelect="false" OnSelectItem="srpResource_SelectItem" ValidationGroup="ReservationResource" />
+                                <Rock:RockDropDownList ID="ddlReservationLocation" runat="server" Label="Location" Required="false" AutoPostBack="true" OnSelectedIndexChanged="ddlReservationLocation_SelectedIndexChanged" />
+                            </div>
+                            <div class="col-md-6">
+                                <Rock:NumberBox ID="nbQuantity" runat="server" NumberType="Integer" MinimumValue="1" ValidationGroup="ReservationResource" Label="Quantity" />
+                                <Rock:NotificationBox ID="nbResourceConflicts" Visible="false" NotificationBoxType="Warning" runat="server" />
+                            </div>
+                        </div>
+                    </ContentTemplate>
+                    <Triggers>
+                        <asp:AsyncPostBackTrigger ControlID="ddlCampus" EventName="SelectedIndexChanged" />
+                    </Triggers>
+                </asp:UpdatePanel>
             </Content>
         </Rock:ModalDialog>
 

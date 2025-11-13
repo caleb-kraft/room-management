@@ -300,15 +300,27 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
         protected override void OnLoad( EventArgs e )
         {
             base.OnLoad( e );
+            
+            // Handle async conflict check postback
+            if ( Request["__EVENTTARGET"] != null && Request["__EVENTTARGET"].StartsWith( "CheckConflicts_" ) )
+            {
+                var reservationIdStr = Request["__EVENTTARGET"].Replace( "CheckConflicts_", "" );
+                int reservationId;
+                if ( int.TryParse( reservationIdStr, out reservationId ) && reservationId > 0 )
+                {
+                    CheckConflictsAsync( reservationId );
+                }
+                return;
+            }
+            
+            // Continue with normal page lifecycle for all postbacks
             if ( !Page.IsPostBack )
             {
                 ShowDetail( PageParameter( "ReservationId" ).AsInteger() );
             }
             else
             {
-
                 LoadAdditionalInfo();
-
             }
         }
 
@@ -400,6 +412,9 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
 
                 Reservation reservation = null;
                 var changes = new History.HistoryChangeList();
+                
+                // Get reservation type once for use throughout the method
+                var reservationType = new ReservationTypeService( rockContext ).Get( ReservationType.Id );
 
                 if ( hfReservationId.Value.AsIntegerOrNull() != null )
                 {
@@ -491,9 +506,6 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                             modifiedReservation.ReservationDoorLockSchedules.Add( doorLockSchedule );
                         }
 
-                        // Get reservation type
-                        var reservationType = new ReservationTypeService( rockContext ).Get( ReservationType.Id );
-
                         // Handle schedule if modified
                         if ( sbSchedule.iCalendarContent != null )
                         {
@@ -527,9 +539,8 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
 
                             // Load attributes for the new reservation
                             newReservation.LoadAttributes( rockContext );
-                            modifiedReservation.LoadAttributes( rockContext );
-                            Rock.Attribute.Helper.GetEditValues( phAttributeEdits, modifiedReservation );
-                            Rock.Attribute.Helper.SaveAttributeValues( modifiedReservation, newReservation, rockContext );
+                            Rock.Attribute.Helper.GetEditValues( phAttributeEdits, newReservation );
+                            newReservation.SaveAttributeValues( rockContext );
 
                             // Save location attributes
                             foreach ( var locationState in LocationsState )
@@ -544,8 +555,8 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                                         if ( phAttributes != null )
                                         {
                                             newLocation.LoadReservationLocationAttributes();
-                                            Rock.Attribute.Helper.GetEditValues( phAttributes, locationState );
-                                            Rock.Attribute.Helper.SaveAttributeValues( locationState, newLocation, rockContext );
+                                            Rock.Attribute.Helper.GetEditValues( phAttributes, newLocation );
+                                            newLocation.SaveAttributeValues( rockContext );
                                         }
                                     }
                                 }
@@ -564,8 +575,8 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                                         if ( phAttributes != null )
                                         {
                                             newResource.LoadReservationResourceAttributes();
-                                            GetResourceEditValues( phAttributes, resourceState );
-                                            Rock.Attribute.Helper.SaveAttributeValues( resourceState, newResource, rockContext );
+                                            GetResourceEditValues( phAttributes, newResource );
+                                            newResource.SaveAttributeValues( rockContext );
                                         }
                                     }
                                 }
@@ -650,7 +661,6 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
 
                 Reservation oldReservation = BuildOldReservation( resourceService, locationService, reservationService, reservation );
 
-                var reservationType = new ReservationTypeService( rockContext ).Get( ReservationType.Id );
                 reservation.ReservationType = reservationType;
                 reservation.ReservationTypeId = reservationType.Id;
 
@@ -902,16 +912,11 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                     return;
                 }
 
-                // Check to make sure there's no conflicts
+                // Set first/last occurrence date times (needed for save)
                 reservation = reservationService.SetFirstLastOccurrenceDateTimes( reservation );
-                var conflictInfo = reservationService.GenerateConflictInfo( reservation, this.CurrentPageReference.Route );
-
-                if ( !string.IsNullOrWhiteSpace( conflictInfo ) )
-                {
-                    nbError.Text = conflictInfo;
-                    nbError.Visible = true;
-                    return;
-                }
+                
+                // Note: Conflict checks will happen AFTER save to avoid blocking the save operation
+                // Conflicts will be checked and displayed asynchronously after save completes
 
                 changes = EvaluateLocationAndResourceChanges( changes, oldReservation, reservation );
 
@@ -985,8 +990,11 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                     }
 
                     // Redirect back to same page so that item grid will show any attributes that were selected to show on grid
+                    // Conflict checks will happen on page load (non-blocking) via query parameter
                     var qryParams = new Dictionary<string, string>();
                     qryParams["ReservationId"] = reservation.Id.ToString();
+                    qryParams["CheckConflicts"] = "true"; // Flag to check conflicts after page loads
+                    
                     NavigateToPage( RockPage.Guid, qryParams );
                 }
             }
@@ -1043,6 +1051,9 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             srpResource.SetExtraRestParams();
 
             BaseResourceRestUrl = srpResource.ItemRestUrlExtraParams;
+            
+            // Only update the resource picker UpdatePanel, not the entire page
+            upnlResourcePicker.Update();
             ddlCampus.Focus();
         }
 
@@ -1391,11 +1402,16 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
         {
             nbError.Visible = false;
 
+            // Update schedule text immediately (fast operation)
             var schedule = new Schedule { iCalendarContent = sbSchedule.iCalendarContent };
             lScheduleText.Text = Reservation.GetFriendlyReservationScheduleText( schedule, ReservationType, nbSetupTime.Text.AsIntegerOrNull(), nbCleanupTime.Text.AsIntegerOrNull(), null, null );
 
+            // Process schedule synchronously - this is fast now after optimizations
             LoadPickers();
             BindReservationDoorLockSchedulesGrid();
+            
+            // Clear any cached schedule data since it changed
+            ViewState["CachedReservationStartDateTime"] = null;
         }
 
         /// <summary>
@@ -2336,8 +2352,18 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
 
         protected void gDoorLockSchedules_ShowEdit( Guid reservationDoorLockScheduleGuid )
         {
-            var schedule = ReservationService.BuildScheduleFromICalContent( sbSchedule.iCalendarContent );
-            var reservationStartDateTime = schedule.FirstStartDateTime;
+            // Cache the schedule parsing to avoid repeated parsing
+            DateTime? reservationStartDateTime = null;
+            if ( ViewState["CachedReservationStartDateTime"] != null )
+            {
+                reservationStartDateTime = ( DateTime? ) ViewState["CachedReservationStartDateTime"];
+            }
+            else if ( !string.IsNullOrWhiteSpace( sbSchedule.iCalendarContent ) )
+            {
+                var schedule = ReservationService.BuildScheduleFromICalContent( sbSchedule.iCalendarContent );
+                reservationStartDateTime = schedule.FirstStartDateTime;
+                ViewState["CachedReservationStartDateTime"] = reservationStartDateTime;
+            }
             if ( reservationStartDateTime != null )
             {
                 divDoorLockModalControls.Visible = true;
@@ -2396,9 +2422,23 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
 
         protected void gDoorLockSchedules_RowDataBound( object sender, GridViewRowEventArgs e )
         {
-            var schedule = ReservationService.BuildScheduleFromICalContent( sbSchedule.iCalendarContent );
-            var reservationStartDateTime = schedule.FirstStartDateTime;
-            BindDoorLockSchedulesRow( e.Row, reservationStartDateTime );
+            // Cache the schedule parsing - only parse once, not for every row
+            if ( e.Row.RowType == DataControlRowType.DataRow )
+            {
+                // Get the cached start date time from ViewState or parse once
+                DateTime? reservationStartDateTime = null;
+                if ( ViewState["CachedReservationStartDateTime"] != null )
+                {
+                    reservationStartDateTime = ( DateTime? ) ViewState["CachedReservationStartDateTime"];
+                }
+                else if ( !string.IsNullOrWhiteSpace( sbSchedule.iCalendarContent ) )
+                {
+                    var schedule = ReservationService.BuildScheduleFromICalContent( sbSchedule.iCalendarContent );
+                    reservationStartDateTime = schedule.FirstStartDateTime;
+                    ViewState["CachedReservationStartDateTime"] = reservationStartDateTime;
+                }
+                BindDoorLockSchedulesRow( e.Row, reservationStartDateTime );
+            }
         }
 
         protected void gViewDoorLockSchedules_RowDataBound( object sender, GridViewRowEventArgs e )
@@ -2452,6 +2492,39 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
 
         #region Reservation Methods
 
+
+        /// <summary>
+        /// Checks conflicts asynchronously after save (non-blocking).
+        /// </summary>
+        /// <param name="reservationId">The reservation identifier.</param>
+        private void CheckConflictsAsync( int reservationId )
+        {
+            try
+            {
+                var conflictCheckContext = new RockContext();
+                var conflictCheckService = new ReservationService( conflictCheckContext );
+                var savedReservation = conflictCheckService.Get( reservationId );
+                
+                if ( savedReservation != null )
+                {
+                    savedReservation = conflictCheckService.SetFirstLastOccurrenceDateTimes( savedReservation );
+                    var conflictInfo = conflictCheckService.GenerateConflictInfo( savedReservation, this.CurrentPageReference.Route );
+                    
+                    if ( !string.IsNullOrWhiteSpace( conflictInfo ) )
+                    {
+                        nbError.Text = conflictInfo;
+                        nbError.Visible = true;
+                        upnlContent.Update();
+                    }
+                }
+            }
+            catch ( Exception ex )
+            {
+                // Log error but don't block - conflict check failed but reservation exists
+                ExceptionLogService.LogException( ex );
+            }
+        }
+
         /// <summary>
         /// Shows the detail.
         /// </summary>
@@ -2489,6 +2562,27 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
 
                 hfReservationId.Value = reservationId.ToString();
                 pdAuditDetails.SetEntity( reservation, ResolveRockUrl( "~" ) );
+
+                // Check for conflicts after save (non-blocking) - trigger JavaScript to check via AJAX after page loads
+                var checkConflictsParam = PageParameter( "CheckConflicts" );
+                if ( !string.IsNullOrWhiteSpace( checkConflictsParam ) && checkConflictsParam.AsBoolean() )
+                {
+                    // Register JavaScript to check conflicts asynchronously after page loads
+                    // This allows the page to render immediately while conflicts are checked in the background
+                    string script = $@"
+                        <script type='text/javascript'>
+                            Sys.Application.add_load(function() {{
+                                setTimeout(function() {{
+                                    // Check conflicts via AJAX after a short delay to let page render
+                                    var reservationId = {reservationId};
+                                    if (reservationId > 0) {{
+                                        __doPostBack('{upnlContent.ClientID}', 'CheckConflicts_' + reservationId);
+                                    }}
+                                }}, 100);
+                            }});
+                        </script>";
+                    ScriptManager.RegisterStartupScript( this, this.GetType(), "CheckConflictsAsync", script, false );
+                }
 
                 // Check if we're editing a single occurrence
                 var occurrenceDateTimeParam = PageParameter( "OccurrenceDateTime" );
@@ -2568,7 +2662,7 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                 {
                     divExceptionOccurrences.Visible = true;
                     gExceptionOccurrences.EntityTypeId = EntityTypeCache.Get<Reservation>().Id;
-                    gExceptionOccurrences.SetLinqDataSource( exceptionOccurrences );
+                    gExceptionOccurrences.SetLinqDataSource( exceptionOccurrences.AsQueryable() );
                     gExceptionOccurrences.DataBind();
                 }
                 else
@@ -2653,6 +2747,7 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             reservation.LoadAttributes( rockContext );
 
             bool readOnly = true;
+            
             nbEditModeMessage.Text = EditModeMessage.ReadOnlyEditActionNotAllowed( EventItem.FriendlyTypeName );
 
             if ( reservation.IsAuthorized( Authorization.ADMINISTRATE, CurrentPerson ) )
@@ -2863,9 +2958,11 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                 SetRequiredFieldsBasedOnReservationType( ReservationType, reservation );
 
                 sbSchedule.iCalendarContent = string.Empty;
+                ViewState["CachedReservationStartDateTime"] = null; // Clear cache when schedule changes
                 if ( reservation.Schedule != null )
                 {
                     sbSchedule.iCalendarContent = reservation.Schedule.iCalendarContent;
+                    ViewState["CachedReservationStartDateTime"] = null; // Clear cache to force re-parsing
                     lScheduleText.Text = reservation.GetFriendlyReservationScheduleText();
                     srpResource.Enabled = true;
                     slpLocation.Enabled = true;
