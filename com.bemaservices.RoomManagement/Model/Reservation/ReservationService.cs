@@ -348,10 +348,12 @@ namespace com.bemaservices.RoomManagement.Model
 
             // OPTIMIZATION: For recurring schedules with no end date, use a shorter default range to improve performance
             // Weekly events with no end would generate 260+ occurrences over 5 years, which is slow
-            // Use 1 year for no-end-date schedules, 5 years for schedules with end dates
+            // Use 2 years for no-end-date schedules (balance between performance and UX), 5 years for schedules with end dates
+            // NOTE: This means conflicts beyond 2 years won't be detected upfront for no-end-date schedules
+            // Users can still check conflicts for specific dates later, and most conflicts occur in the near term
             var hasEndDate = newReservation.LastOccurrenceEndDateTime.HasValue;
-            var maxConflictCheckEndTime = qryStartTime.AddYears( hasEndDate ? 5 : 1 );
-            var qryEndTime = newReservation.LastOccurrenceEndDateTime ?? qryStartTime.AddYears( 1 );
+            var maxConflictCheckEndTime = qryStartTime.AddYears( hasEndDate ? 5 : 2 );
+            var qryEndTime = newReservation.LastOccurrenceEndDateTime ?? qryStartTime.AddYears( 2 );
             
             // Cap the end time to avoid excessive processing
             if ( qryEndTime > maxConflictCheckEndTime )
@@ -491,6 +493,20 @@ namespace com.bemaservices.RoomManagement.Model
             if ( hasConflict )
             {
                 sb.Append( "</ul>" );
+                
+                // UX NOTE: For recurring reservations with no end date, conflict checking is limited to 2 years for performance
+                // Add a helpful notice if this is a long-running recurring schedule
+                var calEvent = reservation.Schedule?.GetICalEvent();
+                var isRecurringNoEnd = calEvent != null && 
+                                       ( calEvent.RecurrenceRules?.Any() == true || calEvent.RecurrenceDates?.Any() == true ) &&
+                                       !reservation.LastOccurrenceEndDateTime.HasValue;
+                
+                if ( isRecurringNoEnd )
+                {
+                    sb.Append( "<br/><small><i>Note: Conflict checking for recurring reservations without an end date is limited to the next 2 years for performance. " );
+                    sb.Append( "Conflicts beyond this period may not be detected until closer to the event date.</i></small>" );
+                }
+                
                 return sb.ToString();
             }
             else
