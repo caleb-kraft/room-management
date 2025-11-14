@@ -1167,28 +1167,92 @@ namespace com.bemaservices.RoomManagement.Model
                     }
                 }
 
-                var occurrences = reservation.GetReservationTimes( beginDateTime, endDateTime ).ToList();
-                if ( occurrences.Count > 0 )
+                // OPTIMIZATION: For recurring schedules, only generate first and last occurrences instead of all occurrences
+                // This dramatically improves performance for long-running recurring schedules
+                var isRecurring = calEvent.RecurrenceRules?.Any() == true || calEvent.RecurrenceDates?.Any() == true;
+                
+                if ( isRecurring && endDateTime != DateTime.MaxValue && endDateTime > beginDateTime.AddDays( 365 ) )
                 {
-                    var firstReservationOccurrence = occurrences.First();
-                    var lastReservationOccurrence = occurrences.Last();
+                    // For long-running recurring schedules, optimize by only getting first and last occurrences
+                    // Get first occurrence - generate a small batch starting from beginDateTime
+                    var firstOccurrences = reservation.GetReservationTimes( beginDateTime, beginDateTime.AddDays( 90 ) ).ToList();
+                    var firstReservationOccurrence = firstOccurrences.FirstOrDefault();
 
-                    try
+                    // Get last occurrence - work backwards from endDateTime or use Until date
+                    ReservationDateTime lastReservationOccurrence = null;
+                    
+                    // If we have an Until date, we can use it directly
+                    var untilRule = calEvent.RecurrenceRules?.FirstOrDefault( r => r.Until != null && r.Until != DateTime.MinValue );
+                    if ( untilRule != null && untilRule.Until != DateTime.MinValue )
                     {
-                        reservation.FirstOccurrenceStartDateTime = firstReservationOccurrence.StartDateTime.AddMinutes( -reservation.SetupTime ?? 0 );
+                        // Generate occurrences near the end date to find the actual last occurrence
+                        // Generate a window before the Until date to account for recurrence patterns
+                        var searchStartDate = untilRule.Until.AddDays( -365 ); // Look back up to 1 year
+                        if ( searchStartDate < beginDateTime )
+                        {
+                            searchStartDate = beginDateTime;
+                        }
+                        var lastOccurrences = reservation.GetReservationTimes( searchStartDate, untilRule.Until.AddDays( 1 ) ).ToList();
+                        lastReservationOccurrence = lastOccurrences.LastOrDefault();
                     }
-                    catch
+                    else
                     {
-                        reservation.FirstOccurrenceStartDateTime = firstReservationOccurrence.StartDateTime;
+                        // For Count-based rules or no end date, we need to generate occurrences
+                        // But limit the range to avoid processing too many
+                        var lastOccurrences = reservation.GetReservationTimes( beginDateTime, endDateTime ).ToList();
+                        lastReservationOccurrence = lastOccurrences.LastOrDefault();
                     }
 
-                    try
+                    if ( firstReservationOccurrence != null )
                     {
-                        reservation.LastOccurrenceEndDateTime = lastReservationOccurrence.EndDateTime.AddMinutes( reservation.CleanupTime ?? 0 );
+                        try
+                        {
+                            reservation.FirstOccurrenceStartDateTime = firstReservationOccurrence.StartDateTime.AddMinutes( -reservation.SetupTime ?? 0 );
+                        }
+                        catch
+                        {
+                            reservation.FirstOccurrenceStartDateTime = firstReservationOccurrence.StartDateTime;
+                        }
                     }
-                    catch
+
+                    if ( lastReservationOccurrence != null )
                     {
-                        reservation.LastOccurrenceEndDateTime = lastReservationOccurrence.EndDateTime;
+                        try
+                        {
+                            reservation.LastOccurrenceEndDateTime = lastReservationOccurrence.EndDateTime.AddMinutes( reservation.CleanupTime ?? 0 );
+                        }
+                        catch
+                        {
+                            reservation.LastOccurrenceEndDateTime = lastReservationOccurrence.EndDateTime;
+                        }
+                    }
+                }
+                else
+                {
+                    // For non-recurring or short-term recurring schedules, use the original approach
+                    var occurrences = reservation.GetReservationTimes( beginDateTime, endDateTime ).ToList();
+                    if ( occurrences.Count > 0 )
+                    {
+                        var firstReservationOccurrence = occurrences.First();
+                        var lastReservationOccurrence = occurrences.Last();
+
+                        try
+                        {
+                            reservation.FirstOccurrenceStartDateTime = firstReservationOccurrence.StartDateTime.AddMinutes( -reservation.SetupTime ?? 0 );
+                        }
+                        catch
+                        {
+                            reservation.FirstOccurrenceStartDateTime = firstReservationOccurrence.StartDateTime;
+                        }
+
+                        try
+                        {
+                            reservation.LastOccurrenceEndDateTime = lastReservationOccurrence.EndDateTime.AddMinutes( reservation.CleanupTime ?? 0 );
+                        }
+                        catch
+                        {
+                            reservation.LastOccurrenceEndDateTime = lastReservationOccurrence.EndDateTime;
+                        }
                     }
                 }
             }

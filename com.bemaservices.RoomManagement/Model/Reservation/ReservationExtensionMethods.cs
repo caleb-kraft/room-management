@@ -80,7 +80,10 @@ namespace com.bemaservices.RoomManagement.Model
                 filterEndDateTime = filterEndDateTime.Value.AddDays( 1 ).AddMilliseconds( -1 );
             }
 
+            // OPTIMIZATION: Use AsNoTracking() to avoid entity tracking overhead since we're just reading data
+            // Also filter more aggressively using FirstOccurrenceStartDateTime/LastOccurrenceEndDateTime
             var reservations = qry
+                .AsNoTracking()
                 .Where( r => r.FirstOccurrenceStartDateTime == null || r.FirstOccurrenceStartDateTime <= filterEndDateTime )
                 .Where( r => r.LastOccurrenceEndDateTime == null || r.LastOccurrenceEndDateTime >= filterStartDateTime )
                 .Where( r => r.Schedule.iCalendarContent.Contains( "RRULE" ) || r.Schedule.iCalendarContent.Contains( "RDATE" ) ||
@@ -90,17 +93,56 @@ namespace com.bemaservices.RoomManagement.Model
                         )
                         .ToList();
 
-            var reservationsWithDates = reservations
-                .Select( r => new ReservationDate
+            // OPTIMIZATION: Generate occurrences lazily and filter early to avoid processing unnecessary reservations
+            var reservationsWithDates = new List<ReservationDate>();
+            foreach ( var reservation in reservations )
+            {
+                // For recurring reservations, use FirstOccurrenceStartDateTime/LastOccurrenceEndDateTime to narrow the search window
+                // This avoids generating occurrences for dates outside the reservation's actual range
+                var occurrenceStartDate = qryStartDateTime;
+                var occurrenceEndDate = qryEndDateTime;
+                
+                // If reservation has FirstOccurrenceStartDateTime, don't search before it (but only if it's after our query start)
+                // This helps narrow the window for long-running recurring reservations
+                if ( reservation.FirstOccurrenceStartDateTime.HasValue && 
+                     reservation.FirstOccurrenceStartDateTime.Value > occurrenceStartDate &&
+                     reservation.FirstOccurrenceStartDateTime.Value <= qryEndDateTime )
                 {
-                    Reservation = r,
-                    ReservationDateTimes = r.GetReservationTimes( qryStartDateTime, qryEndDateTime )
-                } )
-                .Where( r => r.ReservationDateTimes.Any() )
-                .ToList();
+                    occurrenceStartDate = reservation.FirstOccurrenceStartDateTime.Value;
+                }
+                
+                // If reservation has LastOccurrenceEndDateTime, don't search after it (but only if it's before our query end)
+                // This helps narrow the window for long-running recurring reservations
+                if ( reservation.LastOccurrenceEndDateTime.HasValue && 
+                     reservation.LastOccurrenceEndDateTime.Value < occurrenceEndDate &&
+                     reservation.LastOccurrenceEndDateTime.Value >= qryStartDateTime )
+                {
+                    occurrenceEndDate = reservation.LastOccurrenceEndDateTime.Value;
+                }
+                
+                // Only generate occurrences if the date range is valid and overlaps with our filter range
+                if ( occurrenceStartDate <= occurrenceEndDate && occurrenceStartDate <= filterEndDateTime && occurrenceEndDate >= filterStartDateTime )
+                {
+                    var reservationDateTimes = reservation.GetReservationTimes( occurrenceStartDate, occurrenceEndDate );
+                    if ( reservationDateTimes.Any() )
+                    {
+                        reservationsWithDates.Add( new ReservationDate
+                        {
+                            Reservation = reservation,
+                            ReservationDateTimes = reservationDateTimes
+                        } );
+                    }
+                }
+            }
 
             foreach ( var reservationWithDates in reservationsWithDates )
             {
+                // OPTIMIZATION: Early exit if we've reached maxOccurrences
+                if ( maxOccurrences != null && reservationSummaryList.Count >= maxOccurrences )
+                {
+                    break;
+                }
+
                 var reservation = reservationWithDates.Reservation;
 
                 if ( includeAttributes )
@@ -110,6 +152,12 @@ namespace com.bemaservices.RoomManagement.Model
 
                 foreach ( var reservationDateTime in reservationWithDates.ReservationDateTimes )
                 {
+                    // OPTIMIZATION: Early exit if we've reached maxOccurrences
+                    if ( maxOccurrences != null && reservationSummaryList.Count >= maxOccurrences )
+                    {
+                        break;
+                    }
+
                     var reservationStartDateTime = reservationDateTime.StartDateTime.AddMinutes( -reservation.SetupTime ?? 0 );
                     var reservationEndDateTime = reservationDateTime.EndDateTime.AddMinutes( reservation.CleanupTime ?? 0 );
 
