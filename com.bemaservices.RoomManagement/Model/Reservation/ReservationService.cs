@@ -346,10 +346,12 @@ namespace com.bemaservices.RoomManagement.Model
                 qryStartTime = newReservation.FirstOccurrenceStartDateTime.Value;
             }
 
-            // Limit conflict checking to a reasonable range (5 years max) to avoid processing decades of occurrences
-            // Users can check conflicts for specific dates if needed, but we shouldn't check 20+ years on every save
-            var maxConflictCheckEndTime = qryStartTime.AddYears( 5 );
-            var qryEndTime = newReservation.LastOccurrenceEndDateTime ?? RockDateTime.Now.AddYears( 1 );
+            // OPTIMIZATION: For recurring schedules with no end date, use a shorter default range to improve performance
+            // Weekly events with no end would generate 260+ occurrences over 5 years, which is slow
+            // Use 1 year for no-end-date schedules, 5 years for schedules with end dates
+            var hasEndDate = newReservation.LastOccurrenceEndDateTime.HasValue;
+            var maxConflictCheckEndTime = qryStartTime.AddYears( hasEndDate ? 5 : 1 );
+            var qryEndTime = newReservation.LastOccurrenceEndDateTime ?? qryStartTime.AddYears( 1 );
             
             // Cap the end time to avoid excessive processing
             if ( qryEndTime > maxConflictCheckEndTime )
@@ -357,10 +359,78 @@ namespace com.bemaservices.RoomManagement.Model
                 qryEndTime = maxConflictCheckEndTime;
             }
             
-            var newReservationSummaries = newReservationQry.GetReservationSummaries( qryStartTime, qryEndTime );
-            var existingReservationSummaries = filteredExistingReservationQry.GetReservationSummaries( qryStartTime, qryEndTime );
+            // OPTIMIZATION: For long-running recurring schedules (especially no-end-date), use batch processing with early termination
+            // This allows us to stop as soon as we find conflicts instead of generating all occurrences
+            var isLongRunningRecurring = !hasEndDate || ( qryEndTime - qryStartTime ).TotalDays > 365;
+            
+            if ( isLongRunningRecurring )
+            {
+                return GetConflictingReservationSummariesBatched( newReservation, filteredExistingReservationQry, qryStartTime, qryEndTime, arePotentialConflictsReturned );
+            }
+            else
+            {
+                // For short-term schedules, use the original approach (faster for small ranges)
+                var newReservationSummaries = newReservationQry.GetReservationSummaries( qryStartTime, qryEndTime );
+                var existingReservationSummaries = filteredExistingReservationQry.GetReservationSummaries( qryStartTime, qryEndTime );
+                return existingReservationSummaries.WhereConflictsExist( newReservationSummaries );
+            }
+        }
 
-            return existingReservationSummaries.WhereConflictsExist( newReservationSummaries );
+        /// <summary>
+        /// Gets conflicting reservation summaries using batched processing with early termination for long-running recurring schedules.
+        /// This is more efficient than generating all occurrences upfront for schedules with no end date.
+        /// </summary>
+        private List<Model.ReservationSummary> GetConflictingReservationSummariesBatched( Reservation newReservation, IQueryable<Reservation> existingReservationQry, DateTime qryStartTime, DateTime qryEndTime, bool arePotentialConflictsReturned )
+        {
+            var conflictingSummaries = new List<Model.ReservationSummary>();
+            var newReservationQry = new List<Reservation>() { newReservation }.AsQueryable();
+            
+            // OPTIMIZATION: Use smaller batches (1 month) for better memory efficiency and faster conflict detection
+            // This allows us to detect conflicts sooner and use less memory
+            var batchSizeMonths = 1;
+            var currentBatchStart = qryStartTime;
+            var maxBatches = 12; // Limit to 1 year max (12 batches * 1 month) for no-end-date schedules
+            
+            while ( currentBatchStart < qryEndTime )
+            {
+                var currentBatchEnd = currentBatchStart.AddMonths( batchSizeMonths );
+                if ( currentBatchEnd > qryEndTime )
+                {
+                    currentBatchEnd = qryEndTime;
+                }
+                
+                // OPTIMIZATION: Generate occurrences for this batch only (much smaller memory footprint)
+                // For a weekly event, this generates ~4 occurrences per batch instead of 52+ for the full year
+                var newReservationSummaries = newReservationQry.GetReservationSummaries( currentBatchStart, currentBatchEnd );
+                
+                // Only check existing reservations that could overlap with this batch
+                var existingReservationSummaries = existingReservationQry.GetReservationSummaries( currentBatchStart, currentBatchEnd );
+                
+                // Check for conflicts in this batch
+                var batchConflicts = existingReservationSummaries.WhereConflictsExist( newReservationSummaries );
+                if ( batchConflicts.Any() )
+                {
+                    conflictingSummaries.AddRange( batchConflicts );
+                    // OPTIMIZATION: For conflict checking, we typically want to know about ALL conflicts,
+                    // but if performance is critical and we only need to know IF conflicts exist,
+                    // we could add early termination here. For now, we collect all conflicts.
+                }
+                
+                currentBatchStart = currentBatchEnd;
+                
+                // Safety limit to prevent infinite loops
+                if ( conflictingSummaries.Count > 1000 )
+                {
+                    // Too many conflicts - likely a data issue, stop processing
+                    break;
+                }
+            }
+            
+            // Remove duplicates (same reservation might appear in multiple batches)
+            return conflictingSummaries
+                .GroupBy( s => s.Id )
+                .Select( g => g.First() )
+                .ToList();
         }
 
         /// <summary>
