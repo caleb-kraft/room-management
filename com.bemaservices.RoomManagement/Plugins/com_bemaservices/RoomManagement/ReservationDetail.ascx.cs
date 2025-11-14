@@ -316,6 +316,20 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             // Continue with normal page lifecycle for all postbacks
             if ( !Page.IsPostBack )
             {
+                // Clear conflict check flags on initial page load so conflicts can be checked again after new saves
+                var checkConflictsParam = PageParameter( "CheckConflicts" );
+                if ( string.IsNullOrWhiteSpace( checkConflictsParam ) || !checkConflictsParam.AsBoolean() )
+                {
+                    // Only clear if we're not here to check conflicts (i.e., normal page load)
+                    // This allows conflict checking to work when redirected after save
+                    var reservationId = PageParameter( "ReservationId" ).AsInteger();
+                    if ( reservationId > 0 )
+                    {
+                        var conflictCheckKey = $"ConflictsChecked_{reservationId}";
+                        ViewState[conflictCheckKey] = null;
+                    }
+                }
+                
                 ShowDetail( PageParameter( "ReservationId" ).AsInteger() );
             }
             else
@@ -1047,10 +1061,16 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
         /// <param name="e">The <see cref="EventArgs" /> instance containing the event data.</param>
         protected void ddlCampus_SelectedIndexChanged( object sender, EventArgs e )
         {
+            // Update campus ID immediately (fast operation)
             srpResource.CampusId = ddlCampus.SelectedValueAsInt();
-            srpResource.SetExtraRestParams();
-
-            BaseResourceRestUrl = srpResource.ItemRestUrlExtraParams;
+            
+            // Defer SetExtraRestParams to avoid 60+ second delay for recurring schedules
+            // It will be called when the resource picker actually loads data (lazy loading)
+            // Only set BaseResourceRestUrl if it was already set (preserve existing state)
+            if ( !string.IsNullOrWhiteSpace( BaseResourceRestUrl ) )
+            {
+                // Keep existing URL but update campus filter will happen when picker loads
+            }
             
             // Only update the resource picker UpdatePanel, not the entire page
             upnlResourcePicker.Update();
@@ -1406,8 +1426,9 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             var schedule = new Schedule { iCalendarContent = sbSchedule.iCalendarContent };
             lScheduleText.Text = Reservation.GetFriendlyReservationScheduleText( schedule, ReservationType, nbSetupTime.Text.AsIntegerOrNull(), nbCleanupTime.Text.AsIntegerOrNull(), null, null );
 
-            // Process schedule synchronously - this is fast now after optimizations
-            LoadPickers();
+            // Update picker configuration without calling SetExtraRestParams (which is expensive for recurring schedules)
+            // SetExtraRestParams will be called lazily when the picker actually loads data
+            LoadPickers( skipSetExtraRestParams: true );
             BindReservationDoorLockSchedulesGrid();
             
             // Clear any cached schedule data since it changed
@@ -2501,20 +2522,46 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
         {
             try
             {
+                // Prevent infinite loop - check if we've already checked conflicts for this reservation
+                var conflictCheckKey = $"ConflictsChecked_{reservationId}";
+                if ( ViewState[conflictCheckKey] != null && (bool)ViewState[conflictCheckKey] )
+                {
+                    return; // Already checked, don't check again
+                }
+
+                // Mark that we're checking conflicts BEFORE doing the work to prevent race conditions
+                ViewState[conflictCheckKey] = true;
+
                 var conflictCheckContext = new RockContext();
                 var conflictCheckService = new ReservationService( conflictCheckContext );
-                var savedReservation = conflictCheckService.Get( reservationId );
+                
+                // Use AsNoTracking to avoid entity tracking overhead and prevent accidental saves
+                var savedReservation = conflictCheckService.Queryable().AsNoTracking()
+                    .Where( r => r.Id == reservationId )
+                    .FirstOrDefault();
                 
                 if ( savedReservation != null )
                 {
-                    savedReservation = conflictCheckService.SetFirstLastOccurrenceDateTimes( savedReservation );
+                    // Set first/last occurrence date times if not already set (optimization for recurring)
+                    // Only do this if the values are missing to avoid unnecessary processing
+                    if ( !savedReservation.FirstOccurrenceStartDateTime.HasValue || !savedReservation.LastOccurrenceEndDateTime.HasValue )
+                    {
+                        savedReservation = conflictCheckService.SetFirstLastOccurrenceDateTimes( savedReservation );
+                    }
+                    
                     var conflictInfo = conflictCheckService.GenerateConflictInfo( savedReservation, this.CurrentPageReference.Route );
                     
                     if ( !string.IsNullOrWhiteSpace( conflictInfo ) )
                     {
                         nbError.Text = conflictInfo;
                         nbError.Visible = true;
+                        // Only update the UpdatePanel once, after all processing is complete
                         upnlContent.Update();
+                    }
+                    else
+                    {
+                        // No conflicts found, but still mark as checked
+                        // Don't update UpdatePanel if there are no conflicts to avoid unnecessary refresh
                     }
                 }
             }
@@ -2522,6 +2569,10 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             {
                 // Log error but don't block - conflict check failed but reservation exists
                 ExceptionLogService.LogException( ex );
+                
+                // Clear the flag on error so it can be retried if needed
+                var conflictCheckKey = $"ConflictsChecked_{reservationId}";
+                ViewState[conflictCheckKey] = null;
             }
         }
 
@@ -2569,19 +2620,27 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                 {
                     // Register JavaScript to check conflicts asynchronously after page loads
                     // This allows the page to render immediately while conflicts are checked in the background
+                    // The JavaScript closure prevents infinite loops by tracking if the check has already been triggered
+                    var scriptKey = $"CheckConflictsAsync_{reservationId}";
                     string script = $@"
                         <script type='text/javascript'>
-                            Sys.Application.add_load(function() {{
-                                setTimeout(function() {{
-                                    // Check conflicts via AJAX after a short delay to let page render
-                                    var reservationId = {reservationId};
-                                    if (reservationId > 0) {{
-                                        __doPostBack('{upnlContent.ClientID}', 'CheckConflicts_' + reservationId);
+                            (function() {{
+                                var checked = false;
+                                Sys.Application.add_load(function() {{
+                                    if (!checked) {{
+                                        checked = true;
+                                        setTimeout(function() {{
+                                            // Check conflicts via AJAX after a short delay to let page render
+                                            var reservationId = {reservationId};
+                                            if (reservationId > 0) {{
+                                                __doPostBack('{upnlContent.ClientID}', 'CheckConflicts_' + reservationId);
+                                            }}
+                                        }}, 100);
                                     }}
-                                }}, 100);
-                            }});
+                                }});
+                            }})();
                         </script>";
-                    ScriptManager.RegisterStartupScript( this, this.GetType(), "CheckConflictsAsync", script, false );
+                    ScriptManager.RegisterStartupScript( this, this.GetType(), scriptKey, script, false );
                 }
 
                 // Check if we're editing a single occurrence
@@ -3381,7 +3440,7 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
         /// <summary>
         /// Loads the pickers.
         /// </summary>
-        private void LoadPickers()
+        private void LoadPickers( bool skipSetExtraRestParams = false )
         {
             srpResource.Enabled = true;
             slpLocation.Enabled = true;
@@ -3398,7 +3457,13 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             srpResource.ICalendarContent = sbSchedule.iCalendarContent;
             srpResource.SetupTime = nbSetupTime.Text.AsInteger();
             srpResource.CleanupTime = nbCleanupTime.Text.AsInteger();
-            srpResource.SetExtraRestParams();
+            
+            // Skip SetExtraRestParams for schedule builder save to avoid 60+ second delay for recurring schedules
+            // SetExtraRestParams will be called when the picker actually loads data (lazy loading)
+            if ( !skipSetExtraRestParams )
+            {
+                srpResource.SetExtraRestParams();
+            }
 
             slpLocation.ReservationId = reservationId;
             slpLocation.ReservationTypeId = ddlReservationType.SelectedValueAsId();
@@ -3406,7 +3471,13 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             slpLocation.SetupTime = nbSetupTime.Text.AsInteger();
             slpLocation.CleanupTime = nbCleanupTime.Text.AsInteger();
             slpLocation.AttendeeCount = nbAttending.Text.AsInteger();
-            slpLocation.SetExtraRestParams();
+            
+            // Skip SetExtraRestParams for schedule builder save to avoid 60+ second delay for recurring schedules
+            // SetExtraRestParams will be called when the picker actually loads data (lazy loading)
+            if ( !skipSetExtraRestParams )
+            {
+                slpLocation.SetExtraRestParams();
+            }
         }
 
         /// <summary>
