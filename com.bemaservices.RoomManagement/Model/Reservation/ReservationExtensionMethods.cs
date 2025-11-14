@@ -97,30 +97,51 @@ namespace com.bemaservices.RoomManagement.Model
             var reservationsWithDates = new List<ReservationDate>();
             foreach ( var reservation in reservations )
             {
-                // For recurring reservations, use FirstOccurrenceStartDateTime/LastOccurrenceEndDateTime to narrow the search window
-                // This avoids generating occurrences for dates outside the reservation's actual range
-                var occurrenceStartDate = qryStartDateTime;
-                var occurrenceEndDate = qryEndDateTime;
+                // CRITICAL: We must ensure we generate occurrences for the entire filter range to catch all conflicts
+                // The qryStartDateTime/qryEndDateTime already includes a 1-month buffer around filterStartDateTime/filterEndDateTime
+                // This ensures we catch edge cases where occurrences might extend slightly beyond the filter range
                 
-                // If reservation has FirstOccurrenceStartDateTime, don't search before it (but only if it's after our query start)
-                // This helps narrow the window for long-running recurring reservations
-                if ( reservation.FirstOccurrenceStartDateTime.HasValue && 
-                     reservation.FirstOccurrenceStartDateTime.Value > occurrenceStartDate &&
-                     reservation.FirstOccurrenceStartDateTime.Value <= qryEndDateTime )
+                // We can safely narrow the window using FirstOccurrenceStartDateTime/LastOccurrenceEndDateTime ONLY when:
+                // 1. The reservation's range is completely outside the filter range (already filtered by query)
+                // 2. OR the reservation's range extends beyond the filter range (we can narrow to filter range + buffer)
+                
+                // CRITICAL: Always ensure we cover the full filter range to catch all conflicts
+                // Start with the filter range as minimum, then expand if needed for buffer
+                var occurrenceStartDate = filterStartDateTime.Value;
+                var occurrenceEndDate = filterEndDateTime.Value;
+                
+                // Expand to include buffer (qryStartDateTime/qryEndDateTime) to catch edge cases
+                // But only if FirstOccurrenceStartDateTime/LastOccurrenceEndDateTime don't restrict us
+                if ( !reservation.FirstOccurrenceStartDateTime.HasValue || 
+                     reservation.FirstOccurrenceStartDateTime.Value <= qryStartDateTime )
                 {
+                    // No restriction or restriction is before buffer start - use full buffer
+                    occurrenceStartDate = qryStartDateTime;
+                }
+                else if ( reservation.FirstOccurrenceStartDateTime.Value > filterStartDateTime.Value )
+                {
+                    // FirstOccurrenceStartDateTime is after filter start - use it (but still cover filter range)
+                    // This is safe because we know there are no occurrences before FirstOccurrenceStartDateTime
                     occurrenceStartDate = reservation.FirstOccurrenceStartDateTime.Value;
                 }
+                // else: FirstOccurrenceStartDateTime is within filter range - use filterStartDateTime
                 
-                // If reservation has LastOccurrenceEndDateTime, don't search after it (but only if it's before our query end)
-                // This helps narrow the window for long-running recurring reservations
-                if ( reservation.LastOccurrenceEndDateTime.HasValue && 
-                     reservation.LastOccurrenceEndDateTime.Value < occurrenceEndDate &&
-                     reservation.LastOccurrenceEndDateTime.Value >= qryStartDateTime )
+                if ( !reservation.LastOccurrenceEndDateTime.HasValue || 
+                     reservation.LastOccurrenceEndDateTime.Value >= qryEndDateTime )
                 {
+                    // No restriction or restriction is after buffer end - use full buffer
+                    occurrenceEndDate = qryEndDateTime;
+                }
+                else if ( reservation.LastOccurrenceEndDateTime.Value < filterEndDateTime.Value )
+                {
+                    // LastOccurrenceEndDateTime is before filter end - use it (but still cover filter range)
+                    // This is safe because we know there are no occurrences after LastOccurrenceEndDateTime
                     occurrenceEndDate = reservation.LastOccurrenceEndDateTime.Value;
                 }
+                // else: LastOccurrenceEndDateTime is within filter range - use filterEndDateTime
                 
-                // Only generate occurrences if the date range is valid and overlaps with our filter range
+                // Final safety check: ensure we cover at least the filter range
+                // This should always be true given the logic above, but it's a safety net
                 if ( occurrenceStartDate <= occurrenceEndDate && occurrenceStartDate <= filterEndDateTime && occurrenceEndDate >= filterStartDateTime )
                 {
                     var reservationDateTimes = reservation.GetReservationTimes( occurrenceStartDate, occurrenceEndDate );
