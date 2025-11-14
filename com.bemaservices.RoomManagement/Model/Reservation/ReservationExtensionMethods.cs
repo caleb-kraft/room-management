@@ -227,36 +227,101 @@ namespace com.bemaservices.RoomManagement.Model
 
                     if ( validReservationTime || validDoorLockTime )
                     {
+                        // Check for exclusion range overrides for this occurrence date
+                        var exclusionOverride = reservation.GetExclusionRangeOverrideForDate( reservationDateTime.StartDateTime );
+                        
+                        // Apply overrides if they exist
+                        var effectiveSetupTime = exclusionOverride?.SetupTimeOverride ?? reservation.SetupTime ?? 0;
+                        var effectiveCleanupTime = exclusionOverride?.CleanupTimeOverride ?? reservation.CleanupTime ?? 0;
+                        var effectiveNumberAttending = exclusionOverride?.NumberAttendingOverride ?? reservation.NumberAttending;
+                        var effectiveNote = exclusionOverride?.NoteOverride ?? reservation.Note;
+                        PersonAlias effectiveEventContactPersonAlias = reservation.EventContactPersonAlias;
+                        if ( exclusionOverride?.EventContactPersonAliasId.HasValue == true )
+                        {
+                            using ( var rockContext = new RockContext() )
+                            {
+                                effectiveEventContactPersonAlias = new PersonAliasService( rockContext ).Get( exclusionOverride.EventContactPersonAliasId.Value );
+                            }
+                        }
+                        var effectiveEventContactEmail = exclusionOverride?.EventContactEmail ?? reservation.EventContactEmail;
+                        var effectiveEventContactPhone = exclusionOverride?.EventContactPhone ?? reservation.EventContactPhone;
+                        PersonAlias effectiveAdministrativeContactPersonAlias = reservation.AdministrativeContactPersonAlias;
+                        if ( exclusionOverride?.AdministrativeContactPersonAliasId.HasValue == true )
+                        {
+                            using ( var rockContext = new RockContext() )
+                            {
+                                effectiveAdministrativeContactPersonAlias = new PersonAliasService( rockContext ).Get( exclusionOverride.AdministrativeContactPersonAliasId.Value );
+                            }
+                        }
+                        var effectiveAdministrativeContactEmail = exclusionOverride?.AdministrativeContactEmail ?? reservation.AdministrativeContactEmail;
+                        var effectiveAdministrativeContactPhone = exclusionOverride?.AdministrativeContactPhone ?? reservation.AdministrativeContactPhone;
+
+                        // Apply location and resource overrides
+                        var effectiveLocations = reservation.ReservationLocations.ToList();
+                        var effectiveResources = reservation.ReservationResources.ToList();
+                        
+                        if ( exclusionOverride != null )
+                        {
+                            // Filter locations based on overrides
+                            if ( exclusionOverride.LocationOverrides.Any() )
+                            {
+                                effectiveLocations = effectiveLocations.Where( l => 
+                                    exclusionOverride.LocationOverrides.ContainsKey( l.LocationId ) && 
+                                    exclusionOverride.LocationOverrides[l.LocationId] 
+                                ).ToList();
+                            }
+
+                            // Override resource quantities
+                            if ( exclusionOverride.ResourceOverrides.Any() )
+                            {
+                                foreach ( var resource in effectiveResources )
+                                {
+                                    if ( exclusionOverride.ResourceOverrides.ContainsKey( resource.ResourceId ) )
+                                    {
+                                        var overrideQuantity = exclusionOverride.ResourceOverrides[resource.ResourceId];
+                                        if ( overrideQuantity.HasValue )
+                                        {
+                                            resource.Quantity = overrideQuantity.Value;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Recalculate reservation times with overridden setup/cleanup times
+                        var effectiveReservationStartDateTime = reservationDateTime.StartDateTime.AddMinutes( -effectiveSetupTime );
+                        var effectiveReservationEndDateTime = reservationDateTime.EndDateTime.AddMinutes( effectiveCleanupTime );
+
                         var reservationSummary = new Model.ReservationSummary
                         {
                             Id = reservation.Id,
                             ReservationType = reservation.ReservationType,
                             ApprovalState = reservation.ApprovalState,
                             ReservationName = reservation.Name,
-                            ReservationLocations = reservation.ReservationLocations.ToList(),
-                            ReservationResources = reservation.ReservationResources.ToList(),
+                            ReservationLocations = effectiveLocations,
+                            ReservationResources = effectiveResources,
                             UnassignedReservationResources = reservation.UnassignedReservationResources.ToList(),
                             ReservationDoorLockTimes = reservationDoorLockTimes,
                             EventStartDateTime = reservationDateTime.StartDateTime,
                             EventEndDateTime = reservationDateTime.EndDateTime,
-                            ReservationStartDateTime = reservationStartDateTime,
-                            ReservationEndDateTime = reservationEndDateTime,
+                            ReservationStartDateTime = effectiveReservationStartDateTime,
+                            ReservationEndDateTime = effectiveReservationEndDateTime,
                             EventDateTimeDescription = GetFriendlyScheduleDescription( reservationDateTime.StartDateTime, reservationDateTime.EndDateTime ),
                             EventTimeDescription = GetFriendlyScheduleDescription( reservationDateTime.StartDateTime, reservationDateTime.EndDateTime, false ),
-                            ReservationDateTimeDescription = GetFriendlyScheduleDescription( reservationDateTime.StartDateTime.AddMinutes( -reservation.SetupTime ?? 0 ), reservationDateTime.EndDateTime.AddMinutes( reservation.CleanupTime ?? 0 ) ),
-                            ReservationTimeDescription = GetFriendlyScheduleDescription( reservationDateTime.StartDateTime.AddMinutes( -reservation.SetupTime ?? 0 ), reservationDateTime.EndDateTime.AddMinutes( reservation.CleanupTime ?? 0 ), false ),
+                            ReservationDateTimeDescription = GetFriendlyScheduleDescription( effectiveReservationStartDateTime, effectiveReservationEndDateTime ),
+                            ReservationTimeDescription = GetFriendlyScheduleDescription( effectiveReservationStartDateTime, effectiveReservationEndDateTime, false ),
                             ReservationMinistry = reservation.ReservationMinistry,
-                            EventContactPersonAlias = reservation.EventContactPersonAlias,
-                            EventContactEmail = reservation.EventContactEmail,
-                            EventContactPhoneNumber = reservation.EventContactPhone,
-                            AdministrativeContactPersonAlias = reservation.AdministrativeContactPersonAlias,
-                            AdministrativeContactEmail = reservation.AdministrativeContactEmail,
-                            AdministrativeContactPhoneNumber = reservation.AdministrativeContactPhone,
+                            EventContactPersonAlias = effectiveEventContactPersonAlias,
+                            EventContactEmail = effectiveEventContactEmail,
+                            EventContactPhoneNumber = effectiveEventContactPhone,
+                            AdministrativeContactPersonAlias = effectiveAdministrativeContactPersonAlias,
+                            AdministrativeContactEmail = effectiveAdministrativeContactEmail,
+                            AdministrativeContactPhoneNumber = effectiveAdministrativeContactPhone,
                             SetupPhotoId = reservation.SetupPhotoId,
                             SetupPhotoGuid = reservation.SetupPhoto?.Guid,
-                            Note = reservation.Note,
+                            Note = effectiveNote,
                             RequesterAlias = reservation.RequesterAlias,
-                            NumberAttending = reservation.NumberAttending,
+                            NumberAttending = effectiveNumberAttending,
                             ModifiedDateTime = reservation.ModifiedDateTime,
                             ScheduleId = reservation.ScheduleId,
                             IsRecurring = isRecurring,

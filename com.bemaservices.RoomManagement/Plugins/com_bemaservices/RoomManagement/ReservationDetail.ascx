@@ -348,6 +348,35 @@ div[id$="_upnlContent"].modal-open:has(div.picker-menu[style*="display: block"])
                                 </div>
                             </Rock:PanelWidget>
 
+                            <Rock:PanelWidget ID="wpExclusionRangeOverridesEdit" runat="server" Title="Exception Dates & Overrides" CssClass="panel-widget">
+                                <Rock:NotificationBox ID="nbExclusionRangeOverridesEdit" runat="server" NotificationBoxType="Info" Visible="false" />
+                                <p class="description">
+                                    Manage dates that differ from your recurring schedule. <strong>Skipped</strong> = no event on this date. <strong>Override</strong> = event happens with custom details. 
+                                    <a href="#" data-toggle="tooltip" title="Skipped dates are excluded from the schedule and won't appear in your calendar. Overridden dates keep the occurrence but use different contacts, locations, resources, or other details."><i class="fa fa-question-circle"></i></a>
+                                </p>
+                                <Rock:Grid ID="gExclusionRangeOverridesEdit" runat="server" AllowPaging="false" DisplayType="Light" RowItemText="Exception Date" OnRowDataBound="gExclusionRangeOverridesEdit_RowDataBound" ShowConfirmDeleteDialog="true">
+                                    <Columns>
+                                        <Rock:DateField DataField="StartDate" HeaderText="Start Date" DataFormatString="{0:g}" />
+                                        <Rock:DateField DataField="EndDate" HeaderText="End Date" DataFormatString="{0:g}" />
+                                        <Rock:RockTemplateField HeaderText="Status">
+                                            <ItemTemplate>
+                                                <asp:Literal ID="lStatus" runat="server" />
+                                            </ItemTemplate>
+                                        </Rock:RockTemplateField>
+                                        <Rock:RockBoundField DataField="OverrideSummary" HeaderText="Overrides" HtmlEncode="false" />
+                                        <Rock:RockTemplateField HeaderText="Actions">
+                                            <ItemTemplate>
+                                                <asp:Literal ID="lActions" runat="server" />
+                                            </ItemTemplate>
+                                        </Rock:RockTemplateField>
+                                        <Rock:DeleteField OnClick="gExclusionRangeOverrides_Delete" HeaderText="" />
+                                    </Columns>
+                                </Rock:Grid>
+                                <div class="grid-actions">
+                                    <asp:LinkButton ID="btnAddExclusionRangeOverrideEdit" runat="server" CssClass="btn btn-action btn-sm" OnClick="btnAddExclusionRangeOverride_Click" Text="<i class='fa fa-plus'></i> Add Exception Date" />
+                                </div>
+                            </Rock:PanelWidget>
+
                             <Rock:PanelWidget ID="wpAdditionalInfo" runat="server" Title="Additional Info">
                                 <Rock:DynamicPlaceholder ID="phAttributeEdits" runat="server" />
                                 <asp:PlaceHolder ID="phLocationAnswers" runat="server" EnableViewState="false" />
@@ -368,6 +397,68 @@ div[id$="_upnlContent"].modal-open:has(div.picker-menu[style*="display: block"])
         </asp:Panel>
 
         <asp:HiddenField ID="hfActiveDialog" runat="server" />
+
+        <Rock:ModalDialog ID="mdExclusionRangeOverride" runat="server" Title="Edit Exclusion Range Override" OnSaveClick="mdExclusionRangeOverride_SaveClick" OnCancelScript="clearActiveDialog();" ValidationGroup="ExclusionRangeOverride">
+            <Content>
+                <asp:HiddenField ID="hfEditingExclusionRangeIndex" runat="server" />
+                <Rock:NotificationBox ID="nbExclusionRangeOverrideError" runat="server" NotificationBoxType="Danger" Visible="false" />
+                
+                <div class="row">
+                    <div class="col-md-6">
+                        <Rock:DatePicker ID="dpExclusionRangeStart" runat="server" Label="Start Date" Required="true" />
+                    </div>
+                    <div class="col-md-6">
+                        <Rock:DatePicker ID="dpExclusionRangeEnd" runat="server" Label="End Date" Required="true" />
+                    </div>
+                </div>
+
+                <div class="well">
+                    <h5>Contact Overrides</h5>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <Rock:PersonPicker ID="ppOverrideEventContact" runat="server" Label="Event Contact" EnableSelfSelection="true" />
+                            <Rock:PhoneNumberBox ID="pnOverrideEventContactPhone" runat="server" Label="Event Contact Phone" />
+                            <Rock:EmailBox ID="tbOverrideEventContactEmail" runat="server" Label="Event Contact Email" />
+                        </div>
+                        <div class="col-md-6">
+                            <Rock:PersonPicker ID="ppOverrideAdministrativeContact" runat="server" Label="Administrative Contact" EnableSelfSelection="true" />
+                            <Rock:PhoneNumberBox ID="pnOverrideAdministrativeContactPhone" runat="server" Label="Administrative Contact Phone" />
+                            <Rock:EmailBox ID="tbOverrideAdministrativeContactEmail" runat="server" Label="Administrative Contact Email" />
+                        </div>
+                    </div>
+                </div>
+
+                <div class="well">
+                    <h5>Other Overrides</h5>
+                    <div class="row">
+                        <div class="col-md-4">
+                            <Rock:RockDropDownList ID="ddlOverrideCampus" runat="server" Label="Campus" />
+                        </div>
+                        <div class="col-md-4">
+                            <Rock:NumberBox ID="nbOverrideSetupTime" runat="server" NumberType="Integer" MinimumValue="0" Label="Setup Time (minutes)" />
+                        </div>
+                        <div class="col-md-4">
+                            <Rock:NumberBox ID="nbOverrideCleanupTime" runat="server" NumberType="Integer" MinimumValue="0" Label="Cleanup Time (minutes)" />
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6">
+                            <Rock:NumberBox ID="nbOverrideNumberAttending" runat="server" NumberType="Integer" MinimumValue="0" Label="Number Attending" />
+                        </div>
+                        <div class="col-md-6">
+                            <Rock:RockTextBox ID="tbOverrideNote" runat="server" Label="Note" TextMode="MultiLine" Rows="3" />
+                        </div>
+                    </div>
+                </div>
+
+                <div class="well">
+                    <h5>Location & Resource Overrides</h5>
+                    <p class="description">Leave empty to use default locations/resources. Check locations to include, uncheck to exclude.</p>
+                    <asp:PlaceHolder ID="phOverrideLocations" runat="server" />
+                    <asp:PlaceHolder ID="phOverrideResources" runat="server" />
+                </div>
+            </Content>
+        </Rock:ModalDialog>
 
         <Rock:ModalDialog ID="dlgReservationLocation" runat="server" Title="Select Location" OnSaveThenAddClick="dlgReservationLocation_SaveThenAddClick" OnSaveClick="dlgReservationLocation_SaveClick" OnCancelScript="clearActiveDialog();" ValidationGroup="ReservationLocation">
             <Content>

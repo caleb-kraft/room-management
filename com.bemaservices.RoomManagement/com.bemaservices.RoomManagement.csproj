@@ -283,6 +283,7 @@
     <Compile Include="Model\ReservationQuestion\ReservationQuestionService.cs" />
     <Compile Include="Model\Resource\ResourceService.cs" />
     <Compile Include="Model\Resource\Resource.cs" />
+    <Compile Include="Model\Reservation\ExclusionRangeOverride.cs" />
     <Compile Include="Model\Reservation\Reservation.cs" />
     <Compile Include="Model\Reservation\ReservationService.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
