@@ -124,3 +124,20 @@ C:\Projects\
 
 Then follow the [Visual Studio Build Guide](./VISUAL_STUDIO_BUILD_GUIDE.md) to build your plugin.
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

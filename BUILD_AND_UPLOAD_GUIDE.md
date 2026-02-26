@@ -134,3 +134,20 @@ packages/MSBuildTasks.1.5.0.235/tools
 
 **Install Instructions**: See `builds/PostInstallInstructions.html`
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
