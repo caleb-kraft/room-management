@@ -1,4 +1,4 @@
-﻿// <copyright>
+// <copyright>
 // Copyright by BEMA Software Services
 //
 // Licensed under the Rock Community License (the "License");
@@ -34,9 +34,15 @@ using Rock.Security;
 using System.Web;
 using System.Data.Entity;
 using System.Web.UI.HtmlControls;
+using System.Web.UI.WebControls;
 using com.bemaservices.RoomManagement.Attribute;
+using com.bemaservices.RoomManagement.Utility.RockInternalMethods;
 using Rock.Constants;
 using DocumentFormat.OpenXml.Drawing;
+using Ical.Net;
+using Ical.Net.CalendarComponents;
+using Ical.Net.DataTypes;
+using TimeZoneConverter;
 
 namespace RockWeb.Plugins.com_bemaservices.RoomManagement
 {
@@ -300,15 +306,65 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
         protected override void OnLoad( EventArgs e )
         {
             base.OnLoad( e );
+            
+            // Handle async conflict check postback
+            if ( Request["__EVENTTARGET"] != null && Request["__EVENTTARGET"].StartsWith( "CheckConflicts_" ) )
+            {
+                var reservationIdStr = Request["__EVENTTARGET"].Replace( "CheckConflicts_", "" );
+                int reservationId;
+                if ( int.TryParse( reservationIdStr, out reservationId ) && reservationId > 0 )
+                {
+                    CheckConflictsAsync( reservationId );
+                }
+                return;
+            }
+            
+            // Handle exclusion range override commands
+            if ( Request["__EVENTTARGET"] != null && Request["__EVENTTARGET"] == gExclusionRangeOverridesEdit.UniqueID )
+            {
+                var eventArgument = Request["__EVENTARGUMENT"] ?? "";
+                if ( eventArgument.StartsWith( "ToggleToOverride_" ) || 
+                     eventArgument.StartsWith( "ToggleToSkip_" ) || 
+                     eventArgument.StartsWith( "ClearOverride_" ) )
+                {
+                    var commandArgs = eventArgument.Split( '_' );
+                    if ( commandArgs.Length >= 2 )
+                    {
+                        var command = commandArgs[0];
+                        var indexStr = commandArgs[1];
+                        var index = indexStr.AsIntegerOrNull();
+                        
+                        if ( index.HasValue )
+                        {
+                            HandleExclusionRangeOverrideCommand( command, index.Value );
+                            return;
+                        }
+                    }
+                }
+            }
+            
+            // Continue with normal page lifecycle for all postbacks
             if ( !Page.IsPostBack )
             {
+                // Clear conflict check flags on initial page load so conflicts can be checked again after new saves
+                var checkConflictsParam = PageParameter( "CheckConflicts" );
+                if ( string.IsNullOrWhiteSpace( checkConflictsParam ) || !checkConflictsParam.AsBoolean() )
+                {
+                    // Only clear if we're not here to check conflicts (i.e., normal page load)
+                    // This allows conflict checking to work when redirected after save
+                    var reservationId = PageParameter( "ReservationId" ).AsInteger();
+                    if ( reservationId > 0 )
+                    {
+                        var conflictCheckKey = $"ConflictsChecked_{reservationId}";
+                        ViewState[conflictCheckKey] = null;
+                    }
+                }
+                
                 ShowDetail( PageParameter( "ReservationId" ).AsInteger() );
             }
             else
             {
-
                 LoadAdditionalInfo();
-
             }
         }
 
@@ -400,6 +456,9 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
 
                 Reservation reservation = null;
                 var changes = new History.HistoryChangeList();
+                
+                // Get reservation type once for use throughout the method
+                var reservationType = new ReservationTypeService( rockContext ).Get( ReservationType.Id );
 
                 if ( hfReservationId.Value.AsIntegerOrNull() != null )
                 {
@@ -412,6 +471,185 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                     nbEditModeMessage.Text = "This reservation has been modified since it was last opened. Please refresh the page to modify the reservation.";
                     nbEditModeMessage.Visible = true;
                     return;
+                }
+
+                // Check if we're editing a single occurrence
+                DateTime? occurrenceDateTime = null;
+                if ( !string.IsNullOrWhiteSpace( hfOccurrenceDateTime.Value ) )
+                {
+                    DateTime parsedDateTime;
+                    if ( DateTime.TryParse( hfOccurrenceDateTime.Value, out parsedDateTime ) )
+                    {
+                        occurrenceDateTime = parsedDateTime;
+                    }
+                }
+
+                // If editing a single occurrence, handle it differently
+                if ( occurrenceDateTime.HasValue && reservation != null && reservation.Id > 0 )
+                {
+                    // Verify this is a recurring reservation
+                    var calEvent = InetCalendarHelper.CreateCalendarEvent( reservation.Schedule?.iCalendarContent ?? "" );
+                    var isRecurring = calEvent != null && ( ( calEvent.RecurrenceRules?.Any() == true ) || ( calEvent.RecurrenceDates?.Any() == true ) );
+
+                    if ( isRecurring )
+                    {
+                        // Build the modified reservation from the form data
+                        var modifiedReservation = new Reservation
+                        {
+                            ReservationTypeId = ReservationType.Id,
+                            Name = rtbName.Text,
+                            CampusId = ddlCampus.SelectedValueAsId(),
+                            ReservationMinistryId = ddlMinistry.SelectedValueAsId(),
+                            ApprovalState = reservation.ApprovalState,
+                            RequesterAliasId = reservation.RequesterAliasId,
+                            SetupTime = nbSetupTime.Text.AsIntegerOrNull(),
+                            CleanupTime = nbCleanupTime.Text.AsIntegerOrNull(),
+                            NumberAttending = nbAttending.Text.AsIntegerOrNull(),
+                            Note = rtbNote.Text,
+                            SetupPhotoId = fuSetupPhoto.BinaryFileId,
+                            EventContactPersonAliasId = ppEventContact.PersonAliasId,
+                            EventContactPhone = PhoneNumber.FormattedNumber( PhoneNumber.DefaultCountryCode(), pnEventContactPhone.Number ),
+                            EventContactEmail = tbEventContactEmail.Text,
+                            AdministrativeContactPersonAliasId = ppAdministrativeContact.PersonAliasId,
+                            AdministrativeContactPhone = PhoneNumber.FormattedNumber( PhoneNumber.DefaultCountryCode(), pnAdministrativeContactPhone.Number ),
+                            AdministrativeContactEmail = tbAdministrativeContactEmail.Text
+                        };
+
+                        // Copy locations
+                        modifiedReservation.ReservationLocations = new List<ReservationLocation>();
+                        foreach ( var locationState in LocationsState )
+                        {
+                            var location = new ReservationLocation
+                            {
+                                LocationId = locationState.LocationId,
+                                LocationLayoutId = locationState.LocationLayoutId,
+                                ApprovalState = locationState.ApprovalState
+                            };
+                            modifiedReservation.ReservationLocations.Add( location );
+                        }
+
+                        // Copy resources
+                        modifiedReservation.ReservationResources = new List<ReservationResource>();
+                        foreach ( var resourceState in ResourcesState )
+                        {
+                            var resource = new ReservationResource
+                            {
+                                ResourceId = resourceState.ResourceId,
+                                Quantity = resourceState.Quantity,
+                                ApprovalState = resourceState.ApprovalState
+                            };
+                            modifiedReservation.ReservationResources.Add( resource );
+                        }
+
+                        // Copy door lock schedules
+                        modifiedReservation.ReservationDoorLockSchedules = new List<ReservationDoorLockSchedule>();
+                        foreach ( var doorLockScheduleState in DoorLockSchedulesState )
+                        {
+                            var doorLockSchedule = new ReservationDoorLockSchedule();
+                            doorLockSchedule.CopyPropertiesFrom( doorLockScheduleState );
+                            modifiedReservation.ReservationDoorLockSchedules.Add( doorLockSchedule );
+                        }
+
+                        // Handle schedule if modified
+                        if ( sbSchedule.iCalendarContent != null )
+                        {
+                            var schedule = ReservationService.BuildScheduleFromICalContent( sbSchedule.iCalendarContent );
+                            var scheduleErrorMessage = String.Empty;
+                            var newSchedule = ReservationService.UpdateScheduleWithMaxEndDate( schedule, reservationType, out scheduleErrorMessage );
+                            if ( scheduleErrorMessage.IsNotNullOrWhiteSpace() )
+                            {
+                                nbEditModeMessage.Title = "Warning";
+                                nbEditModeMessage.Text = scheduleErrorMessage;
+                                nbEditModeMessage.Visible = true;
+                                return;
+                            }
+                            // Note: For single occurrence editing, we'll create a one-time schedule, so we don't use the modified schedule here
+                        }
+
+                        try
+                        {
+                            // Use EditSingleOccurrence to handle the single occurrence edit
+                            var newReservation = reservationService.EditSingleOccurrence( reservation, occurrenceDateTime.Value, modifiedReservation, rockContext );
+
+                            if ( newReservation == null )
+                            {
+                                nbError.Text = "The specified occurrence does not exist in the recurring reservation.";
+                                nbError.Visible = true;
+                                return;
+                            }
+
+                            // Save changes
+                            rockContext.SaveChanges();
+
+                            // Load attributes for the new reservation
+                            newReservation.LoadAttributes( rockContext );
+                            Rock.Attribute.Helper.GetEditValues( phAttributeEdits, newReservation );
+                            newReservation.SaveAttributeValues( rockContext );
+
+                            // Save location attributes
+                            foreach ( var locationState in LocationsState )
+                            {
+                                var newLocation = newReservation.ReservationLocations.FirstOrDefault( rl => rl.LocationId == locationState.LocationId );
+                                if ( newLocation != null )
+                                {
+                                    var headControl = phLocationAnswers.FindControl( "cReservationLocation_" + locationState.Guid.ToString() ) as Control;
+                                    if ( headControl != null )
+                                    {
+                                        var phAttributes = headControl.FindControl( "phAttributes_" + locationState.Guid.ToString() ) as PlaceHolder;
+                                        if ( phAttributes != null )
+                                        {
+                                            newLocation.LoadReservationLocationAttributes();
+                                            Rock.Attribute.Helper.GetEditValues( phAttributes, newLocation );
+                                            newLocation.SaveAttributeValues( rockContext );
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Save resource attributes
+                            foreach ( var resourceState in ResourcesState )
+                            {
+                                var newResource = newReservation.ReservationResources.FirstOrDefault( rr => rr.ResourceId == resourceState.ResourceId );
+                                if ( newResource != null )
+                                {
+                                    var headControl = phResourceAnswers.FindControl( "cReservationResource_" + resourceState.Guid.ToString() ) as Control;
+                                    if ( headControl != null )
+                                    {
+                                        var phAttributes = headControl.FindControl( "phAttributes_" + resourceState.Guid.ToString() ) as PlaceHolder;
+                                        if ( phAttributes != null )
+                                        {
+                                            newResource.LoadReservationResourceAttributes();
+                                            GetResourceEditValues( phAttributes, newResource );
+                                            newResource.SaveAttributeValues( rockContext );
+                                        }
+                                    }
+                                }
+                            }
+
+                            rockContext.SaveChanges();
+
+                            // Show success message and redirect to the new reservation
+                            nbEditModeMessage.NotificationBoxType = Rock.Web.UI.Controls.NotificationBoxType.Success;
+                            nbEditModeMessage.Title = "Occurrence Edited Successfully";
+                            nbEditModeMessage.Text = string.Format( 
+                                "The occurrence on {0} has been edited. A new reservation has been created for this occurrence. <a href='{1}?ReservationId={2}' class='btn btn-sm btn-primary'>View New Reservation</a>", 
+                                occurrenceDateTime.Value.ToString( "g" ),
+                                this.CurrentPageReference.BuildUrl(),
+                                newReservation.Id );
+                            nbEditModeMessage.Visible = true;
+
+                            // Refresh the view to show the original reservation
+                            ShowDetail( reservation.Id );
+                            return;
+                        }
+                        catch ( Exception ex )
+                        {
+                            ExceptionLogService.LogException( ex );
+                            nbError.Text = "An error occurred while editing the single occurrence: " + ex.Message;
+                            nbError.Visible = true;
+                            return;
+                        }
+                    }
                 }
 
                 if ( reservation == null )
@@ -467,7 +705,6 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
 
                 Reservation oldReservation = BuildOldReservation( resourceService, locationService, reservationService, reservation );
 
-                var reservationType = new ReservationTypeService( rockContext ).Get( ReservationType.Id );
                 reservation.ReservationType = reservationType;
                 reservation.ReservationTypeId = reservationType.Id;
 
@@ -719,16 +956,11 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                     return;
                 }
 
-                // Check to make sure there's no conflicts
+                // Set first/last occurrence date times (needed for save)
                 reservation = reservationService.SetFirstLastOccurrenceDateTimes( reservation );
-                var conflictInfo = reservationService.GenerateConflictInfo( reservation, this.CurrentPageReference.Route );
-
-                if ( !string.IsNullOrWhiteSpace( conflictInfo ) )
-                {
-                    nbError.Text = conflictInfo;
-                    nbError.Visible = true;
-                    return;
-                }
+                
+                // Note: Conflict checks will happen AFTER save to avoid blocking the save operation
+                // Conflicts will be checked and displayed asynchronously after save completes
 
                 changes = EvaluateLocationAndResourceChanges( changes, oldReservation, reservation );
 
@@ -802,8 +1034,11 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                     }
 
                     // Redirect back to same page so that item grid will show any attributes that were selected to show on grid
+                    // Conflict checks will happen on page load (non-blocking) via query parameter
                     var qryParams = new Dictionary<string, string>();
                     qryParams["ReservationId"] = reservation.Id.ToString();
+                    qryParams["CheckConflicts"] = "true"; // Flag to check conflicts after page loads
+                    
                     NavigateToPage( RockPage.Guid, qryParams );
                 }
             }
@@ -856,10 +1091,19 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
         /// <param name="e">The <see cref="EventArgs" /> instance containing the event data.</param>
         protected void ddlCampus_SelectedIndexChanged( object sender, EventArgs e )
         {
+            // Update campus ID immediately (fast operation)
             srpResource.CampusId = ddlCampus.SelectedValueAsInt();
-            srpResource.SetExtraRestParams();
-
-            BaseResourceRestUrl = srpResource.ItemRestUrlExtraParams;
+            
+            // Defer SetExtraRestParams to avoid 60+ second delay for recurring schedules
+            // It will be called when the resource picker actually loads data (lazy loading)
+            // Only set BaseResourceRestUrl if it was already set (preserve existing state)
+            if ( !string.IsNullOrWhiteSpace( BaseResourceRestUrl ) )
+            {
+                // Keep existing URL but update campus filter will happen when picker loads
+            }
+            
+            // Only update the resource picker UpdatePanel, not the entire page
+            upnlResourcePicker.Update();
             ddlCampus.Focus();
         }
 
@@ -991,6 +1235,480 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             btnCopy.Visible = false;
             btnDelete.Visible = false;
             ShowEditDetails( newItem );
+        }
+
+        /// <summary>
+        /// Handles the Edit event of the gExceptionOccurrences control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="RowEventArgs" /> instance containing the event data.</param>
+        protected void gExceptionOccurrences_Edit( object sender, RowEventArgs e )
+        {
+            var reservationId = ( int ) e.RowKeyValue;
+            ShowDetail( reservationId );
+        }
+
+        /// <summary>
+        /// Handles the Click event of the btnAddExclusionRangeOverride control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="EventArgs" /> instance containing the event data.</param>
+        protected void btnAddExclusionRangeOverride_Click( object sender, EventArgs e )
+        {
+            var newOverride = new ExclusionRangeOverride
+            {
+                StartDate = RockDateTime.Today,
+                EndDate = RockDateTime.Today
+            };
+            hfEditingExclusionRangeIndex.Value = "-1";
+            hfActiveDialog.Value = "mdExclusionRangeOverride";
+            LoadExclusionRangeOverrideModal( newOverride, -1 );
+            mdExclusionRangeOverride.Show();
+        }
+
+        /// <summary>
+        /// Handles the Edit event of the gExclusionRangeOverrides control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="RowEventArgs" /> instance containing the event data.</param>
+        protected void gExclusionRangeOverrides_Edit( object sender, RowEventArgs e )
+        {
+            if ( e.RowKeyValue == null )
+            {
+                return;
+            }
+
+            var index = ( int ) e.RowKeyValue;
+            var overrides = GetExclusionRangeOverrides();
+            
+            if ( index >= 0 && index < overrides.Count )
+            {
+                var overrideItem = overrides[index];
+                hfEditingExclusionRangeIndex.Value = index.ToString();
+                hfActiveDialog.Value = "mdExclusionRangeOverride";
+                LoadExclusionRangeOverrideModal( overrideItem, index );
+                mdExclusionRangeOverride.Show();
+            }
+            else if ( index == -1 )
+            {
+                // This is a range without an override yet - create a new one
+                Schedule schedule = null;
+                var reservationId = hfReservationId.ValueAsInt();
+                if ( reservationId > 0 )
+                {
+                    using ( var rockContext = new RockContext() )
+                    {
+                        var reservationService = new ReservationService( rockContext );
+                        var reservation = reservationService.Get( reservationId );
+                        if ( reservation != null && reservation.Schedule != null )
+                        {
+                            schedule = reservation.Schedule;
+                        }
+                    }
+                }
+                
+                // If still no schedule, try to get from schedule builder
+                if ( schedule == null && !string.IsNullOrWhiteSpace( sbSchedule.iCalendarContent ) )
+                {
+                    schedule = new Schedule { iCalendarContent = sbSchedule.iCalendarContent };
+                }
+                
+                // Get exclusion ranges and find the one that matches
+                var exclusionRanges = GetExclusionDateRangesFromSchedule( schedule );
+                var overridesList = GetExclusionRangeOverrides();
+                
+                // Find the first exclusion range that doesn't have an override
+                var rangeWithoutOverride = exclusionRanges.FirstOrDefault( r => 
+                    !overridesList.Any( o => o.StartDate.Date == r.StartDate.Date && o.EndDate.Date == r.EndDate.Date ) );
+                
+                if ( rangeWithoutOverride != null )
+                {
+                    var newOverride = new ExclusionRangeOverride
+                    {
+                        StartDate = rangeWithoutOverride.StartDate,
+                        EndDate = rangeWithoutOverride.EndDate
+                    };
+                    hfEditingExclusionRangeIndex.Value = "-1";
+                    hfActiveDialog.Value = "mdExclusionRangeOverride";
+                    LoadExclusionRangeOverrideModal( newOverride, -1 );
+                    mdExclusionRangeOverride.Show();
+                }
+            }
+        }
+
+        /// <summary>
+        /// Handles the Delete event of the gExclusionRangeOverrides control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="RowEventArgs" /> instance containing the event data.</param>
+        protected void gExclusionRangeOverrides_Delete( object sender, RowEventArgs e )
+        {
+            if ( e.RowKeyValue == null )
+            {
+                return;
+            }
+
+            var index = ( int ) e.RowKeyValue;
+            var overrides = GetExclusionRangeOverrides();
+            
+            if ( index >= 0 && index < overrides.Count )
+            {
+                // Remove override and also remove from EXDATE if present
+                var overrideToRemove = overrides[index];
+                var startDate = overrideToRemove.StartDate;
+                var endDate = overrideToRemove.EndDate;
+                
+                overrides.RemoveAt( index );
+                SaveExclusionRangeOverrides( overrides );
+                
+                // Remove from schedule EXDATE if it exists
+                RemoveExclusionDateRange( startDate, endDate );
+                
+                BindExclusionRangeOverridesGrid();
+            }
+            else if ( index == -1 )
+            {
+                // This is a skipped date (no override), remove from EXDATE
+                // Need to get date range from grid row
+                var gridView = sender as Grid;
+                var row = gridView.Rows[e.Row.RowIndex];
+                if ( row != null )
+                {
+                    var startDateField = row.FindControl( "StartDate" ) as Literal;
+                    var endDateField = row.FindControl( "EndDate" ) as Literal;
+                    
+                    // Try to parse from cell text if controls not found
+                    if ( startDateField == null && row.Cells.Count > 0 )
+                    {
+                        var cellText = row.Cells[0].Text;
+                        if ( DateTime.TryParse( cellText, out DateTime startDate ) && row.Cells.Count > 1 )
+                        {
+                            if ( DateTime.TryParse( row.Cells[1].Text, out DateTime endDate ) )
+                            {
+                                RemoveExclusionDateRange( startDate, endDate );
+                                BindExclusionRangeOverridesGrid();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Handles the RowDataBound event of the gExclusionRangeOverridesEdit control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="GridViewRowEventArgs" /> instance containing the event data.</param>
+        protected void gExclusionRangeOverridesEdit_RowDataBound( object sender, GridViewRowEventArgs e )
+        {
+            if ( e.Row.RowType != DataControlRowType.DataRow )
+            {
+                return;
+            }
+
+            var row = e.Row;
+            var dataItem = row.DataItem;
+            
+            // Get status from data
+            var status = "Normal";
+            var index = -1;
+            var isExcluded = false;
+            
+            if ( dataItem != null )
+            {
+                var props = dataItem.GetType().GetProperties();
+                var statusProp = props.FirstOrDefault( p => p.Name == "Status" );
+                var indexProp = props.FirstOrDefault( p => p.Name == "Index" );
+                var isExcludedProp = props.FirstOrDefault( p => p.Name == "IsExcluded" );
+                
+                if ( statusProp != null ) status = statusProp.GetValue( dataItem )?.ToString() ?? "Normal";
+                if ( indexProp != null ) index = ( int ) ( indexProp.GetValue( dataItem ) ?? -1 );
+                if ( isExcludedProp != null ) isExcluded = ( isExcludedProp.GetValue( dataItem )?.ToString() ?? "false" ) == "true";
+            }
+
+            // Set status badge
+            var lStatus = row.FindControl( "lStatus" ) as Literal;
+            if ( lStatus != null )
+            {
+                string badgeClass = "label-default";
+                string badgeText = status;
+                
+                switch ( status )
+                {
+                    case "Skipped":
+                        badgeClass = "label-danger";
+                        badgeText = "Skipped";
+                        break;
+                    case "Override":
+                        badgeClass = "label-warning";
+                        badgeText = "Override";
+                        break;
+                    case "Both":
+                        badgeClass = "label-info";
+                        badgeText = "Both";
+                        break;
+                    default:
+                        badgeClass = "label-default";
+                        badgeText = "Normal";
+                        break;
+                }
+                
+                lStatus.Text = $"<span class='label {badgeClass}'>{badgeText}</span>";
+            }
+
+            // Set action buttons
+            var lActions = row.FindControl( "lActions" ) as Literal;
+            if ( lActions != null )
+            {
+                var actions = new List<string>();
+                var startDate = "";
+                var endDate = "";
+                
+                // Try to get dates from row cells
+                if ( row.Cells.Count > 0 && row.Cells[0] != null && row.Cells[1] != null )
+                {
+                    startDate = HttpUtility.HtmlEncode( row.Cells[0].Text.Trim() );
+                    endDate = HttpUtility.HtmlEncode( row.Cells[1].Text.Trim() );
+                }
+
+                // Use JavaScript postbacks for action buttons
+                var gridUniqueId = gExclusionRangeOverridesEdit.UniqueID;
+                
+                if ( status == "Skipped" || status == "Both" )
+                {
+                    // Can convert to override - edit existing override or create new one
+                    var commandArg = index >= 0 ? index.ToString() : "-1";
+                    var postbackScript = $"javascript:__doPostBack('{gridUniqueId}', 'ToggleToOverride_{commandArg}'); return false;";
+                    actions.Add( $"<a href='#' class='btn btn-xs btn-action' onclick=\"{postbackScript}\" title='Keep event with custom details'><i class='fa fa-edit'></i> Keep w/ Overrides</a>" );
+                }
+                
+                if ( status == "Override" || status == "Both" )
+                {
+                    // Can convert to skipped
+                    var commandArg = index >= 0 ? index.ToString() : "-1";
+                    var postbackScript = $"javascript:__doPostBack('{gridUniqueId}', 'ToggleToSkip_{commandArg}'); return false;";
+                    actions.Add( $"<a href='#' class='btn btn-xs btn-danger' onclick=\"{postbackScript}\" title='Skip event entirely (no occurrence)'><i class='fa fa-ban'></i> Skip Event</a>" );
+                }
+                
+                if ( status == "Override" || status == "Both" )
+                {
+                    // Can clear override (but keep the date in the list if it's excluded)
+                    var commandArg = index >= 0 ? index.ToString() : "-1";
+                    var postbackScript = $"javascript:__doPostBack('{gridUniqueId}', 'ClearOverride_{commandArg}'); return false;";
+                    actions.Add( $"<a href='#' class='btn btn-xs btn-default' onclick=\"{postbackScript}\" title='Remove override details'><i class='fa fa-eraser'></i> Clear Override</a>" );
+                }
+
+                lActions.Text = string.Join( " ", actions );
+            }
+        }
+
+        /// <summary>
+        /// Handles exclusion range override commands from JavaScript postbacks.
+        /// </summary>
+        /// <param name="command">The command name.</param>
+        /// <param name="index">The override index.</param>
+        private void HandleExclusionRangeOverrideCommand( string command, int index )
+        {
+            var overrides = GetExclusionRangeOverrides();
+            
+            switch ( command )
+            {
+                case "ToggleToOverride":
+                    // Convert skipped date to override - open modal to edit
+                    if ( index == -1 )
+                    {
+                        // This is a skipped date without override - get date range from schedule
+                        Schedule schedule = null;
+                        var reservationId = hfReservationId.ValueAsInt();
+                        if ( reservationId > 0 )
+                        {
+                            using ( var rockContext = new RockContext() )
+                            {
+                                var reservationService = new ReservationService( rockContext );
+                                var reservation = reservationService.Get( reservationId );
+                                if ( reservation != null && reservation.Schedule != null )
+                                {
+                                    schedule = reservation.Schedule;
+                                }
+                            }
+                        }
+                        
+                        if ( schedule == null && !string.IsNullOrWhiteSpace( sbSchedule.iCalendarContent ) )
+                        {
+                            schedule = new Schedule { iCalendarContent = sbSchedule.iCalendarContent };
+                        }
+                        
+                        var exclusionRanges = GetExclusionDateRangesFromSchedule( schedule );
+                        // Find the first exclusion range without override
+                        var rangeWithoutOverride = exclusionRanges.FirstOrDefault( r => 
+                            !overrides.Any( o => o.StartDate.Date == r.StartDate.Date && o.EndDate.Date == r.EndDate.Date ) );
+                        
+                        if ( rangeWithoutOverride != null )
+                        {
+                            // Remove from EXDATE and create override
+                            RemoveExclusionDateRange( rangeWithoutOverride.StartDate, rangeWithoutOverride.EndDate );
+                            
+                            var newOverride = new ExclusionRangeOverride
+                            {
+                                StartDate = rangeWithoutOverride.StartDate,
+                                EndDate = rangeWithoutOverride.EndDate
+                            };
+                            hfEditingExclusionRangeIndex.Value = "-1";
+                            hfActiveDialog.Value = "mdExclusionRangeOverride";
+                            LoadExclusionRangeOverrideModal( newOverride, -1 );
+                            mdExclusionRangeOverride.Show();
+                        }
+                    }
+                    else if ( index >= 0 && index < overrides.Count )
+                    {
+                        // Edit existing override
+                        var overrideItem = overrides[index];
+                        hfEditingExclusionRangeIndex.Value = index.ToString();
+                        hfActiveDialog.Value = "mdExclusionRangeOverride";
+                        LoadExclusionRangeOverrideModal( overrideItem, index );
+                        mdExclusionRangeOverride.Show();
+                    }
+                    break;
+                    
+                case "ToggleToSkip":
+                    // Convert override to skipped - remove override and add to EXDATE
+                    if ( index >= 0 && index < overrides.Count )
+                    {
+                        var overrideItem = overrides[index];
+                        var startDate = overrideItem.StartDate;
+                        var endDate = overrideItem.EndDate;
+                        
+                        // Remove override
+                        overrides.RemoveAt( index );
+                        SaveExclusionRangeOverrides( overrides );
+                        
+                        // Add to EXDATE
+                        AddExclusionDateRange( startDate, endDate );
+                        
+                        BindExclusionRangeOverridesGrid();
+                    }
+                    break;
+                    
+                case "ClearOverride":
+                    // Clear override details but keep the date in list
+                    if ( index >= 0 && index < overrides.Count )
+                    {
+                        var overrideItem = overrides[index];
+                        
+                        // Clear all override fields
+                        overrideItem.EventContactPersonAliasId = null;
+                        overrideItem.EventContactPhone = null;
+                        overrideItem.EventContactEmail = null;
+                        overrideItem.AdministrativeContactPersonAliasId = null;
+                        overrideItem.AdministrativeContactPhone = null;
+                        overrideItem.AdministrativeContactEmail = null;
+                        overrideItem.CampusIdOverride = null;
+                        overrideItem.SetupTimeOverride = null;
+                        overrideItem.CleanupTimeOverride = null;
+                        overrideItem.NumberAttendingOverride = null;
+                        overrideItem.NoteOverride = null;
+                        overrideItem.LocationOverrides.Clear();
+                        overrideItem.ResourceOverrides.Clear();
+                        
+                        // If no fields are overridden, remove the override entirely
+                        SaveExclusionRangeOverrides( overrides );
+                        BindExclusionRangeOverridesGrid();
+                    }
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// Handles the SaveClick event of the mdExclusionRangeOverride control.
+        /// </summary>
+        /// <param name="sender">The source of the event.</param>
+        /// <param name="e">The <see cref="EventArgs" /> instance containing the event data.</param>
+        protected void mdExclusionRangeOverride_SaveClick( object sender, EventArgs e )
+        {
+            nbExclusionRangeOverrideError.Visible = false;
+
+            if ( !dpExclusionRangeStart.SelectedDate.HasValue || !dpExclusionRangeEnd.SelectedDate.HasValue )
+            {
+                nbExclusionRangeOverrideError.Text = "Start Date and End Date are required.";
+                nbExclusionRangeOverrideError.Visible = true;
+                return;
+            }
+
+            if ( dpExclusionRangeStart.SelectedDate.Value > dpExclusionRangeEnd.SelectedDate.Value )
+            {
+                nbExclusionRangeOverrideError.Text = "Start Date must be before or equal to End Date.";
+                nbExclusionRangeOverrideError.Visible = true;
+                return;
+            }
+
+            var overrides = GetExclusionRangeOverrides();
+            var index = hfEditingExclusionRangeIndex.Value.AsIntegerOrNull();
+            
+            ExclusionRangeOverride overrideItem;
+            if ( index.HasValue && index.Value >= 0 && index.Value < overrides.Count )
+            {
+                overrideItem = overrides[index.Value];
+            }
+            else
+            {
+                overrideItem = new ExclusionRangeOverride();
+                overrides.Add( overrideItem );
+            }
+
+            // Set date range
+            overrideItem.StartDate = dpExclusionRangeStart.SelectedDate.Value.Date;
+            overrideItem.EndDate = dpExclusionRangeEnd.SelectedDate.Value.Date;
+
+            // Set contact overrides
+            overrideItem.EventContactPersonAliasId = ppOverrideEventContact.PersonAliasId;
+            overrideItem.EventContactPhone = pnOverrideEventContactPhone.Text;
+            overrideItem.EventContactEmail = tbOverrideEventContactEmail.Text;
+            overrideItem.AdministrativeContactPersonAliasId = ppOverrideAdministrativeContact.PersonAliasId;
+            overrideItem.AdministrativeContactPhone = pnOverrideAdministrativeContactPhone.Text;
+            overrideItem.AdministrativeContactEmail = tbOverrideAdministrativeContactEmail.Text;
+
+            // Set other overrides
+            overrideItem.CampusIdOverride = ddlOverrideCampus.SelectedValueAsId();
+            overrideItem.SetupTimeOverride = nbOverrideSetupTime.IntegerValue;
+            overrideItem.CleanupTimeOverride = nbOverrideCleanupTime.IntegerValue;
+            overrideItem.NumberAttendingOverride = nbOverrideNumberAttending.IntegerValue;
+            overrideItem.NoteOverride = tbOverrideNote.Text;
+
+            // Set location overrides
+            overrideItem.LocationOverrides.Clear();
+            foreach ( Control control in phOverrideLocations.Controls )
+            {
+                if ( control is CheckBox checkbox && checkbox.ID.StartsWith( "chkLocation_" ) )
+                {
+                    var locationId = checkbox.ID.Replace( "chkLocation_", "" ).AsInteger();
+                    if ( locationId > 0 )
+                    {
+                        overrideItem.LocationOverrides[locationId] = checkbox.Checked;
+                    }
+                }
+            }
+
+            // Set resource overrides
+            overrideItem.ResourceOverrides.Clear();
+            foreach ( Control control in phOverrideResources.Controls )
+            {
+                if ( control is Panel panel && panel.ID.StartsWith( "pnlResource_" ) )
+                {
+                    var resourceId = panel.ID.Replace( "pnlResource_", "" ).AsInteger();
+                    if ( resourceId > 0 )
+                    {
+                        var quantityBox = panel.FindControl( "nbResourceQuantity_" + resourceId ) as NumberBox;
+                        if ( quantityBox != null && quantityBox.IntegerValue.HasValue )
+                        {
+                            overrideItem.ResourceOverrides[resourceId] = quantityBox.IntegerValue.Value;
+                        }
+                    }
+                }
+            }
+
+            SaveExclusionRangeOverrides( overrides );
+            BindExclusionRangeOverridesGrid();
+            mdExclusionRangeOverride.Hide();
         }
 
         /// <summary>
@@ -1197,11 +1915,21 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
         {
             nbError.Visible = false;
 
+            // Update schedule text immediately (fast operation)
             var schedule = new Schedule { iCalendarContent = sbSchedule.iCalendarContent };
             lScheduleText.Text = Reservation.GetFriendlyReservationScheduleText( schedule, ReservationType, nbSetupTime.Text.AsIntegerOrNull(), nbCleanupTime.Text.AsIntegerOrNull(), null, null );
 
-            LoadPickers();
+            // Update picker configuration without calling SetExtraRestParams (which is expensive for recurring schedules)
+            // SetExtraRestParams will be called lazily when the picker actually loads data
+            LoadPickers( skipSetExtraRestParams: true );
             BindReservationDoorLockSchedulesGrid();
+            
+            // Refresh exclusion range overrides grid since schedule (and exclusion ranges) may have changed
+            // Use the schedule from the schedule builder since it may not be saved to the reservation yet
+            BindExclusionRangeOverridesGrid( schedule );
+            
+            // Clear any cached schedule data since it changed
+            ViewState["CachedReservationStartDateTime"] = null;
         }
 
         /// <summary>
@@ -2142,8 +2870,18 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
 
         protected void gDoorLockSchedules_ShowEdit( Guid reservationDoorLockScheduleGuid )
         {
-            var schedule = ReservationService.BuildScheduleFromICalContent( sbSchedule.iCalendarContent );
-            var reservationStartDateTime = schedule.FirstStartDateTime;
+            // Cache the schedule parsing to avoid repeated parsing
+            DateTime? reservationStartDateTime = null;
+            if ( ViewState["CachedReservationStartDateTime"] != null )
+            {
+                reservationStartDateTime = ( DateTime? ) ViewState["CachedReservationStartDateTime"];
+            }
+            else if ( !string.IsNullOrWhiteSpace( sbSchedule.iCalendarContent ) )
+            {
+                var schedule = ReservationService.BuildScheduleFromICalContent( sbSchedule.iCalendarContent );
+                reservationStartDateTime = schedule.FirstStartDateTime;
+                ViewState["CachedReservationStartDateTime"] = reservationStartDateTime;
+            }
             if ( reservationStartDateTime != null )
             {
                 divDoorLockModalControls.Visible = true;
@@ -2202,9 +2940,23 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
 
         protected void gDoorLockSchedules_RowDataBound( object sender, GridViewRowEventArgs e )
         {
-            var schedule = ReservationService.BuildScheduleFromICalContent( sbSchedule.iCalendarContent );
-            var reservationStartDateTime = schedule.FirstStartDateTime;
-            BindDoorLockSchedulesRow( e.Row, reservationStartDateTime );
+            // Cache the schedule parsing - only parse once, not for every row
+            if ( e.Row.RowType == DataControlRowType.DataRow )
+            {
+                // Get the cached start date time from ViewState or parse once
+                DateTime? reservationStartDateTime = null;
+                if ( ViewState["CachedReservationStartDateTime"] != null )
+                {
+                    reservationStartDateTime = ( DateTime? ) ViewState["CachedReservationStartDateTime"];
+                }
+                else if ( !string.IsNullOrWhiteSpace( sbSchedule.iCalendarContent ) )
+                {
+                    var schedule = ReservationService.BuildScheduleFromICalContent( sbSchedule.iCalendarContent );
+                    reservationStartDateTime = schedule.FirstStartDateTime;
+                    ViewState["CachedReservationStartDateTime"] = reservationStartDateTime;
+                }
+                BindDoorLockSchedulesRow( e.Row, reservationStartDateTime );
+            }
         }
 
         protected void gViewDoorLockSchedules_RowDataBound( object sender, GridViewRowEventArgs e )
@@ -2258,6 +3010,69 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
 
         #region Reservation Methods
 
+
+        /// <summary>
+        /// Checks conflicts asynchronously after save (non-blocking).
+        /// </summary>
+        /// <param name="reservationId">The reservation identifier.</param>
+        private void CheckConflictsAsync( int reservationId )
+        {
+            try
+            {
+                // Prevent infinite loop - check if we've already checked conflicts for this reservation
+                var conflictCheckKey = $"ConflictsChecked_{reservationId}";
+                if ( ViewState[conflictCheckKey] != null && (bool)ViewState[conflictCheckKey] )
+                {
+                    return; // Already checked, don't check again
+                }
+
+                // Mark that we're checking conflicts BEFORE doing the work to prevent race conditions
+                ViewState[conflictCheckKey] = true;
+
+                var conflictCheckContext = new RockContext();
+                var conflictCheckService = new ReservationService( conflictCheckContext );
+                
+                // Use AsNoTracking to avoid entity tracking overhead and prevent accidental saves
+                var savedReservation = conflictCheckService.Queryable().AsNoTracking()
+                    .Where( r => r.Id == reservationId )
+                    .FirstOrDefault();
+                
+                if ( savedReservation != null )
+                {
+                    // Set first/last occurrence date times if not already set (optimization for recurring)
+                    // Only do this if the values are missing to avoid unnecessary processing
+                    if ( !savedReservation.FirstOccurrenceStartDateTime.HasValue || !savedReservation.LastOccurrenceEndDateTime.HasValue )
+                    {
+                        savedReservation = conflictCheckService.SetFirstLastOccurrenceDateTimes( savedReservation );
+                    }
+                    
+                    var conflictInfo = conflictCheckService.GenerateConflictInfo( savedReservation, this.CurrentPageReference.Route );
+                    
+                    if ( !string.IsNullOrWhiteSpace( conflictInfo ) )
+                    {
+                        nbError.Text = conflictInfo;
+                        nbError.Visible = true;
+                        // Only update the UpdatePanel once, after all processing is complete
+                        upnlContent.Update();
+                    }
+                    else
+                    {
+                        // No conflicts found, but still mark as checked
+                        // Don't update UpdatePanel if there are no conflicts to avoid unnecessary refresh
+                    }
+                }
+            }
+            catch ( Exception ex )
+            {
+                // Log error but don't block - conflict check failed but reservation exists
+                ExceptionLogService.LogException( ex );
+                
+                // Clear the flag on error so it can be retried if needed
+                var conflictCheckKey = $"ConflictsChecked_{reservationId}";
+                ViewState[conflictCheckKey] = null;
+            }
+        }
+
         /// <summary>
         /// Shows the detail.
         /// </summary>
@@ -2295,6 +3110,63 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
 
                 hfReservationId.Value = reservationId.ToString();
                 pdAuditDetails.SetEntity( reservation, ResolveRockUrl( "~" ) );
+
+                // Check for conflicts after save (non-blocking) - trigger JavaScript to check via AJAX after page loads
+                var checkConflictsParam = PageParameter( "CheckConflicts" );
+                if ( !string.IsNullOrWhiteSpace( checkConflictsParam ) && checkConflictsParam.AsBoolean() )
+                {
+                    // Register JavaScript to check conflicts asynchronously after page loads
+                    // This allows the page to render immediately while conflicts are checked in the background
+                    // The JavaScript closure prevents infinite loops by tracking if the check has already been triggered
+                    var scriptKey = $"CheckConflictsAsync_{reservationId}";
+                    string script = $@"
+                        <script type='text/javascript'>
+                            (function() {{
+                                var checked = false;
+                                Sys.Application.add_load(function() {{
+                                    if (!checked) {{
+                                        checked = true;
+                                        setTimeout(function() {{
+                                            // Check conflicts via AJAX after a short delay to let page render
+                                            var reservationId = {reservationId};
+                                            if (reservationId > 0) {{
+                                                __doPostBack('{upnlContent.ClientID}', 'CheckConflicts_' + reservationId);
+                                            }}
+                                        }}, 100);
+                                    }}
+                                }});
+                            }})();
+                        </script>";
+                    ScriptManager.RegisterStartupScript( this, this.GetType(), scriptKey, script, false );
+                }
+
+                // Check if we're editing a single occurrence
+                var occurrenceDateTimeParam = PageParameter( "OccurrenceDateTime" );
+                if ( !string.IsNullOrWhiteSpace( occurrenceDateTimeParam ) )
+                {
+                    DateTime occurrenceDateTime;
+                    if ( DateTime.TryParse( occurrenceDateTimeParam, out occurrenceDateTime ) )
+                    {
+                        hfOccurrenceDateTime.Value = occurrenceDateTime.ToString( "O" ); // ISO 8601 format
+
+                        // Verify this is a recurring reservation
+                        var calEvent = InetCalendarHelper.CreateCalendarEvent( reservation.Schedule?.iCalendarContent ?? "" );
+                        var isRecurring = calEvent != null && ( ( calEvent.RecurrenceRules?.Any() == true ) || ( calEvent.RecurrenceDates?.Any() == true ) );
+
+                        if ( isRecurring )
+                        {
+                            // Show warning that we're editing a single occurrence
+                            nbSingleOccurrenceWarning.Visible = true;
+                            nbSingleOccurrenceWarning.Title = "Editing Single Occurrence";
+                            nbSingleOccurrenceWarning.Text = string.Format( 
+                                "You are editing only the occurrence on <strong>{0}</strong>. This will create a separate reservation for this occurrence while keeping the original recurring series unchanged for all other dates.<br/><br/>" +
+                                "<a href='{1}?ReservationId={2}' class='btn btn-sm btn-default'>Edit All Occurrences Instead</a>", 
+                                occurrenceDateTime.ToString( "g" ),
+                                this.CurrentPageReference.BuildUrl(),
+                                reservation.Id );
+                        }
+                    }
+                }
 
                 // Check to make sure there's no conflicts
                 var warningInfo = reservationService.GenerateConflictInfo( reservation, this.CurrentPageReference.Route, true );
@@ -2336,6 +3208,50 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                 btnDownload.Text = btnDownloadText.ResolveMergeFields( mergeFields );
 
                 ModifiedDateTime = reservation.ReservationModifiedDateTime;
+
+                // Check if this reservation has exception occurrences and display them
+                if ( reservation != null && reservation.Id > 0 )
+                {
+                    var exceptionOccurrences = reservationService.GetExceptionOccurrences( reservation ).ToList();
+                    if ( exceptionOccurrences.Any() )
+                    {
+                        divExceptionOccurrences.Visible = true;
+                        gExceptionOccurrences.EntityTypeId = EntityTypeCache.Get<Reservation>().Id;
+                        gExceptionOccurrences.SetLinqDataSource( exceptionOccurrences.AsQueryable() );
+                        gExceptionOccurrences.DataBind();
+                    }
+                    else
+                    {
+                        divExceptionOccurrences.Visible = false;
+                    }
+
+                    // Bind exclusion range overrides
+                    BindExclusionRangeOverridesGrid();
+                }
+
+                // Check if this reservation IS an exception occurrence
+                var isExceptionOccurrence = !string.IsNullOrWhiteSpace( reservation.ForeignKey ) && 
+                                           reservation.ForeignKey.StartsWith( "OriginalReservation_" );
+                if ( isExceptionOccurrence )
+                {
+                    var foreignKeyParts = reservation.ForeignKey.Split( '_' );
+                    if ( foreignKeyParts.Length > 1 && int.TryParse( foreignKeyParts[1], out int originalReservationId ) )
+                    {
+                        var originalReservation = reservationService.Get( originalReservationId );
+                        if ( originalReservation != null )
+                        {
+                            nbSingleOccurrenceWarning.Visible = true;
+                            nbSingleOccurrenceWarning.NotificationBoxType = Rock.Web.UI.Controls.NotificationBoxType.Info;
+                            nbSingleOccurrenceWarning.Title = "Exception Occurrence";
+                            nbSingleOccurrenceWarning.Text = string.Format( 
+                                "This reservation is an exception occurrence from the recurring series <strong>{0}</strong>. " +
+                                "<a href='{1}?ReservationId={2}' class='btn btn-sm btn-default'>View Original Series</a>", 
+                                originalReservation.Name,
+                                this.CurrentPageReference.BuildUrl(),
+                                originalReservationId );
+                        }
+                    }
+                }
             }
 
             if ( reservation == null )
@@ -2390,6 +3306,7 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             reservation.LoadAttributes( rockContext );
 
             bool readOnly = true;
+            
             nbEditModeMessage.Text = EditModeMessage.ReadOnlyEditActionNotAllowed( EventItem.FriendlyTypeName );
 
             if ( reservation.IsAuthorized( Authorization.ADMINISTRATE, CurrentPerson ) )
@@ -2600,9 +3517,11 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                 SetRequiredFieldsBasedOnReservationType( ReservationType, reservation );
 
                 sbSchedule.iCalendarContent = string.Empty;
+                ViewState["CachedReservationStartDateTime"] = null; // Clear cache when schedule changes
                 if ( reservation.Schedule != null )
                 {
                     sbSchedule.iCalendarContent = reservation.Schedule.iCalendarContent;
+                    ViewState["CachedReservationStartDateTime"] = null; // Clear cache to force re-parsing
                     lScheduleText.Text = reservation.GetFriendlyReservationScheduleText();
                     srpResource.Enabled = true;
                     slpLocation.Enabled = true;
@@ -2653,6 +3572,8 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                 LoadAdditionalInfo( true, true, true, true );
                 wpAdditionalInfo.Expanded = GetAttributeValue( "IsAdditionalInfoExpanded" ).AsBoolean();
 
+                // Bind exclusion range overrides
+                BindExclusionRangeOverridesGrid();
 
                 ddlCampus.Items.Clear();
                 ddlCampus.Items.Add( new ListItem( string.Empty, string.Empty ) );
@@ -3021,7 +3942,7 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
         /// <summary>
         /// Loads the pickers.
         /// </summary>
-        private void LoadPickers()
+        private void LoadPickers( bool skipSetExtraRestParams = false )
         {
             srpResource.Enabled = true;
             slpLocation.Enabled = true;
@@ -3038,7 +3959,13 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             srpResource.ICalendarContent = sbSchedule.iCalendarContent;
             srpResource.SetupTime = nbSetupTime.Text.AsInteger();
             srpResource.CleanupTime = nbCleanupTime.Text.AsInteger();
-            srpResource.SetExtraRestParams();
+            
+            // Skip SetExtraRestParams for schedule builder save to avoid 60+ second delay for recurring schedules
+            // SetExtraRestParams will be called when the picker actually loads data (lazy loading)
+            if ( !skipSetExtraRestParams )
+            {
+                srpResource.SetExtraRestParams();
+            }
 
             slpLocation.ReservationId = reservationId;
             slpLocation.ReservationTypeId = ddlReservationType.SelectedValueAsId();
@@ -3046,7 +3973,13 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             slpLocation.SetupTime = nbSetupTime.Text.AsInteger();
             slpLocation.CleanupTime = nbCleanupTime.Text.AsInteger();
             slpLocation.AttendeeCount = nbAttending.Text.AsInteger();
-            slpLocation.SetExtraRestParams();
+            
+            // Skip SetExtraRestParams for schedule builder save to avoid 60+ second delay for recurring schedules
+            // SetExtraRestParams will be called when the picker actually loads data (lazy loading)
+            if ( !skipSetExtraRestParams )
+            {
+                slpLocation.SetExtraRestParams();
+            }
         }
 
         /// <summary>
@@ -3148,19 +4081,21 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             }
 
             var configuredPhoneTypeId = reservation.ReservationType.ContactPhoneTypeValueId;
+            var eventContactPersonAlias = CurrentPersonAlias;
             if ( PageParameter( "EventContactPersonAliasId" ).AsInteger() != 0 )
             {
-                var eventContactPersonAlias = new PersonAliasService( rockContext ).Get( PageParameter( "EventContactPersonAliasId" ).AsInteger() );
-                if ( eventContactPersonAlias != null )
-                {
-                    reservation.EventContactPersonAlias = eventContactPersonAlias;
-                    reservation.EventContactPersonAliasId = eventContactPersonAlias.Id;
-                    reservation.EventContactEmail = eventContactPersonAlias.Person.Email;
-                    reservation.EventContactPhone = eventContactPersonAlias.Person.PhoneNumbers.OrderByDescending( n => n.NumberTypeValueId == configuredPhoneTypeId )
-                                    .ThenBy( n => n.NumberTypeValue.Order )
-                                    .Select( n => n.NumberFormatted )
-                                    .FirstOrDefault();
-                }
+                eventContactPersonAlias = new PersonAliasService( rockContext ).Get( PageParameter( "EventContactPersonAliasId" ).AsInteger() );
+            }
+
+            if ( eventContactPersonAlias != null )
+            {
+                reservation.EventContactPersonAlias = eventContactPersonAlias;
+                reservation.EventContactPersonAliasId = eventContactPersonAlias.Id;
+                reservation.EventContactEmail = eventContactPersonAlias.Person.Email;
+                reservation.EventContactPhone = eventContactPersonAlias.Person.PhoneNumbers.OrderByDescending( n => n.NumberTypeValueId == configuredPhoneTypeId )
+                                .ThenBy( n => n.NumberTypeValue.Order )
+                                .Select( n => n.NumberFormatted )
+                                .FirstOrDefault();
             }
 
             var adminContactPersonAlias = CurrentPersonAlias;
@@ -4323,6 +5258,661 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
         }
 
         #endregion
+
+        #endregion
+
+        #region Exclusion Range Override Methods
+
+        /// <summary>
+        /// Gets the exclusion range overrides from the current reservation.
+        /// </summary>
+        /// <returns>A list of exclusion range overrides.</returns>
+        private List<ExclusionRangeOverride> GetExclusionRangeOverrides()
+        {
+            var reservationId = hfReservationId.ValueAsInt();
+            if ( reservationId > 0 )
+            {
+                using ( var rockContext = new RockContext() )
+                {
+                    var reservationService = new ReservationService( rockContext );
+                    var reservation = reservationService.Get( reservationId );
+                    if ( reservation != null )
+                    {
+                        return reservation.GetExclusionRangeOverrides();
+                    }
+                }
+            }
+            return new List<ExclusionRangeOverride>();
+        }
+
+        /// <summary>
+        /// Saves the exclusion range overrides to the current reservation.
+        /// </summary>
+        /// <param name="overrides">The exclusion range overrides to save.</param>
+        private void SaveExclusionRangeOverrides( List<ExclusionRangeOverride> overrides )
+        {
+            var reservationId = hfReservationId.ValueAsInt();
+            if ( reservationId > 0 )
+            {
+                using ( var rockContext = new RockContext() )
+                {
+                    var reservationService = new ReservationService( rockContext );
+                    var reservation = reservationService.Get( reservationId );
+                    if ( reservation != null )
+                    {
+                        reservation.SetExclusionRangeOverrides( overrides );
+                        rockContext.SaveChanges();
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Binds the exclusion range overrides grid.
+        /// </summary>
+        /// <param name="schedule">Optional schedule to use instead of loading from reservation. Used when schedule builder saves.</param>
+        private void BindExclusionRangeOverridesGrid( Schedule schedule = null )
+        {
+            var reservationId = hfReservationId.ValueAsInt();
+            
+            // If no schedule provided, try to get it from the reservation or schedule builder
+            if ( schedule == null )
+            {
+                if ( reservationId > 0 )
+                {
+                    using ( var rockContext = new RockContext() )
+                    {
+                        var reservationService = new ReservationService( rockContext );
+                        var reservation = reservationService.Get( reservationId );
+                        if ( reservation != null && reservation.Schedule != null )
+                        {
+                            schedule = reservation.Schedule;
+                        }
+                    }
+                }
+                
+                // If still no schedule, try to get from schedule builder (for new reservations)
+                if ( schedule == null && !string.IsNullOrWhiteSpace( sbSchedule.iCalendarContent ) )
+                {
+                    schedule = new Schedule { iCalendarContent = sbSchedule.iCalendarContent };
+                }
+            }
+
+            // Always show panel in edit mode (even if no exceptions exist)
+            wpExclusionRangeOverridesEdit.Visible = true;
+            btnAddExclusionRangeOverrideEdit.Visible = true;
+
+            if ( schedule == null || string.IsNullOrWhiteSpace( schedule.iCalendarContent ) )
+            {
+                // No schedule yet - show empty state
+                gExclusionRangeOverridesEdit.DataSource = new List<object>();
+                gExclusionRangeOverridesEdit.DataBind();
+                return;
+            }
+
+            // Parse exclusion date ranges from the schedule
+            var exclusionRanges = GetExclusionDateRangesFromSchedule( schedule );
+            var overrides = GetExclusionRangeOverrides();
+
+            // Set DataKeyNames so RowKeyValue works
+            gExclusionRangeOverridesEdit.DataKeyNames = new string[] { "Index", "IsExcluded" };
+
+            // Create a list with all exception dates (both excluded and overridden)
+            var gridData = new List<object>();
+            
+            // Add existing overrides (these are NOT excluded from schedule)
+            for ( int i = 0; i < overrides.Count; i++ )
+            {
+                var overrideItem = overrides[i];
+                var isInExclusionList = exclusionRanges.Any( r => 
+                    r.StartDate.Date == overrideItem.StartDate.Date && 
+                    r.EndDate.Date == overrideItem.EndDate.Date );
+                
+                gridData.Add( new
+                {
+                    Index = i,
+                    StartDate = overrideItem.StartDate,
+                    EndDate = overrideItem.EndDate,
+                    IsExcluded = isInExclusionList ? "true" : "false",
+                    OverrideSummary = GetOverrideSummary( overrideItem ),
+                    Status = isInExclusionList ? "Both" : "Override"
+                } );
+            }
+
+            // Add exclusion ranges that don't have overrides (these are skipped)
+            foreach ( var range in exclusionRanges )
+            {
+                if ( !overrides.Any( o => o.StartDate.Date == range.StartDate.Date && o.EndDate.Date == range.EndDate.Date ) )
+                {
+                    gridData.Add( new
+                    {
+                        Index = -1,
+                        StartDate = range.StartDate,
+                        EndDate = range.EndDate,
+                        IsExcluded = "true",
+                        OverrideSummary = "<span class='text-muted'>No overrides</span>",
+                        Status = "Skipped"
+                    } );
+                }
+            }
+
+            var orderedData = gridData.OrderBy( d => ( ( dynamic ) d ).StartDate ).ToList();
+            gExclusionRangeOverridesEdit.DataSource = orderedData;
+            gExclusionRangeOverridesEdit.DataBind();
+        }
+
+        /// <summary>
+        /// Adds an exclusion date range to the schedule's EXDATE list.
+        /// </summary>
+        /// <param name="startDate">The start date.</param>
+        /// <param name="endDate">The end date.</param>
+        private void AddExclusionDateRange( DateTime startDate, DateTime endDate )
+        {
+            var reservationId = hfReservationId.ValueAsInt();
+            if ( reservationId <= 0 )
+            {
+                // New reservation - update schedule builder
+                if ( !string.IsNullOrWhiteSpace( sbSchedule.iCalendarContent ) )
+                {
+                    var updatedContent = AddExclusionDateRangeToICal( sbSchedule.iCalendarContent, startDate, endDate );
+                    if ( updatedContent != null )
+                    {
+                        sbSchedule.iCalendarContent = updatedContent;
+                    }
+                }
+                return;
+            }
+
+            // Existing reservation - update schedule in database
+            using ( var rockContext = new RockContext() )
+            {
+                var reservationService = new ReservationService( rockContext );
+                var reservation = reservationService.Get( reservationId );
+                if ( reservation != null && reservation.Schedule != null )
+                {
+                    var updatedContent = AddExclusionDateRangeToICal( reservation.Schedule.iCalendarContent, startDate, endDate );
+                    if ( updatedContent != null )
+                    {
+                        reservation.Schedule.iCalendarContent = updatedContent;
+                        rockContext.SaveChanges();
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Removes an exclusion date range from the schedule's EXDATE list.
+        /// </summary>
+        /// <param name="startDate">The start date.</param>
+        /// <param name="endDate">The end date.</param>
+        private void RemoveExclusionDateRange( DateTime startDate, DateTime endDate )
+        {
+            var reservationId = hfReservationId.ValueAsInt();
+            if ( reservationId <= 0 )
+            {
+                // New reservation - update schedule builder
+                if ( !string.IsNullOrWhiteSpace( sbSchedule.iCalendarContent ) )
+                {
+                    var updatedContent = RemoveExclusionDateRangeFromICal( sbSchedule.iCalendarContent, startDate, endDate );
+                    if ( updatedContent != null )
+                    {
+                        sbSchedule.iCalendarContent = updatedContent;
+                    }
+                }
+                return;
+            }
+
+            // Existing reservation - update schedule in database
+            using ( var rockContext = new RockContext() )
+            {
+                var reservationService = new ReservationService( rockContext );
+                var reservation = reservationService.Get( reservationId );
+                if ( reservation != null && reservation.Schedule != null )
+                {
+                    var updatedContent = RemoveExclusionDateRangeFromICal( reservation.Schedule.iCalendarContent, startDate, endDate );
+                    if ( updatedContent != null )
+                    {
+                        reservation.Schedule.iCalendarContent = updatedContent;
+                        rockContext.SaveChanges();
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Adds exclusion dates to iCalendar content for a date range.
+        /// </summary>
+        /// <param name="iCalContent">The iCalendar content.</param>
+        /// <param name="startDate">The start date.</param>
+        /// <param name="endDate">The end date.</param>
+        /// <returns>The updated iCalendar content, or null if no changes needed.</returns>
+        private string AddExclusionDateRangeToICal( string iCalContent, DateTime startDate, DateTime endDate )
+        {
+            try
+            {
+                var calEvent = InetCalendarHelper.CreateCalendarEvent( iCalContent );
+                if ( calEvent == null || calEvent.DtStart == null )
+                {
+                    return null;
+                }
+
+                var isAllDay = calEvent.IsAllDay;
+                var eventTimeZoneId = calEvent.DtStart.TzId ?? TZConvert.WindowsToIana( RockDateTime.OrgTimeZoneInfo.Id );
+
+                // Create or get the exception dates list
+                PeriodList exceptionDates;
+                if ( calEvent.ExceptionDates?.Any() == true )
+                {
+                    exceptionDates = calEvent.ExceptionDates.First();
+                }
+                else
+                {
+                    exceptionDates = new PeriodList { TzId = eventTimeZoneId };
+                    if ( isAllDay )
+                    {
+                        exceptionDates.Parameters.Set( "TZID", eventTimeZoneId );
+                        exceptionDates.Parameters.Set( "VALUE", "DATE" );
+                    }
+                    if ( calEvent.ExceptionDates == null )
+                    {
+                        calEvent.ExceptionDates = new List<PeriodList>();
+                    }
+                    calEvent.ExceptionDates.Add( exceptionDates );
+                }
+
+                // Add all dates in the range
+                var currentDate = startDate.Date;
+                var endDateOnly = endDate.Date;
+                var datesAdded = false;
+
+                while ( currentDate <= endDateOnly )
+                {
+                    DateTime exceptionDateTime = currentDate;
+                    if ( !isAllDay && calEvent.DtStart?.Value != null )
+                    {
+                        // Use the time from the original event start
+                        var eventTime = calEvent.DtStart.Value.TimeOfDay;
+                        exceptionDateTime = currentDate.Add( eventTime );
+                    }
+
+                    Period exceptionPeriod;
+                    if ( isAllDay )
+                    {
+                        exceptionPeriod = new Period( new CalDateTime( exceptionDateTime ) );
+                    }
+                    else
+                    {
+                        exceptionPeriod = new Period( new CalDateTime( exceptionDateTime )
+                        {
+                            TzId = eventTimeZoneId,
+                            HasTime = true
+                        } );
+                    }
+
+                    // Check if this exception date already exists
+                    var existingException = exceptionDates.FirstOrDefault( ep => 
+                        ep.StartTime?.Value != null && 
+                        ep.StartTime.Value.Date == currentDate );
+
+                    if ( existingException == null )
+                    {
+                        exceptionDates.Add( exceptionPeriod );
+                        datesAdded = true;
+                    }
+
+                    currentDate = currentDate.AddDays( 1 );
+                }
+
+                if ( datesAdded )
+                {
+                    // Serialize the updated calendar event
+                    var calendar = new Calendar();
+                    calendar.Events.Add( calEvent );
+                    return InetCalendarHelperOverrides.SerializeCalendarForExport( calendar );
+                }
+            }
+            catch ( Exception ex )
+            {
+                ExceptionLogService.LogException( ex );
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Removes exclusion dates from iCalendar content for a date range.
+        /// </summary>
+        /// <param name="iCalContent">The iCalendar content.</param>
+        /// <param name="startDate">The start date.</param>
+        /// <param name="endDate">The end date.</param>
+        /// <returns>The updated iCalendar content, or null if no changes needed.</returns>
+        private string RemoveExclusionDateRangeFromICal( string iCalContent, DateTime startDate, DateTime endDate )
+        {
+            try
+            {
+                var calEvent = InetCalendarHelper.CreateCalendarEvent( iCalContent );
+                if ( calEvent == null || calEvent.ExceptionDates == null || !calEvent.ExceptionDates.Any() )
+                {
+                    return null;
+                }
+
+                var exceptionDates = calEvent.ExceptionDates.First();
+                if ( exceptionDates == null || !exceptionDates.Any() )
+                {
+                    return null;
+                }
+
+                // Remove all dates in the range
+                var currentDate = startDate.Date;
+                var endDateOnly = endDate.Date;
+                var datesRemoved = false;
+                var datesToRemove = new List<Period>();
+
+                foreach ( var period in exceptionDates )
+                {
+                    if ( period.StartTime?.Value != null )
+                    {
+                        var periodDate = period.StartTime.Value.Date;
+                        if ( periodDate >= currentDate && periodDate <= endDateOnly )
+                        {
+                            datesToRemove.Add( period );
+                            datesRemoved = true;
+                        }
+                    }
+                }
+
+                if ( datesRemoved )
+                {
+                    foreach ( var period in datesToRemove )
+                    {
+                        exceptionDates.Remove( period );
+                    }
+
+                    // If no exception dates remain, remove the ExceptionDates property
+                    if ( !exceptionDates.Any() )
+                    {
+                        calEvent.ExceptionDates.Clear();
+                    }
+
+                    // Serialize the updated calendar event
+                    var calendar = new Calendar();
+                    calendar.Events.Add( calEvent );
+                    return InetCalendarHelperOverrides.SerializeCalendarForExport( calendar );
+                }
+            }
+            catch ( Exception ex )
+            {
+                ExceptionLogService.LogException( ex );
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Gets exclusion date ranges from the schedule's iCalendar content.
+        /// </summary>
+        /// <param name="schedule">The schedule.</param>
+        /// <returns>A list of date ranges.</returns>
+        private List<ExclusionRangeOverride> GetExclusionDateRangesFromSchedule( Schedule schedule )
+        {
+            var ranges = new List<ExclusionRangeOverride>();
+
+            if ( schedule == null || string.IsNullOrWhiteSpace( schedule.iCalendarContent ) )
+            {
+                return ranges;
+            }
+
+            try
+            {
+                var calEvent = InetCalendarHelper.CreateCalendarEvent( schedule.iCalendarContent );
+                if ( calEvent != null && calEvent.ExceptionDates != null && calEvent.ExceptionDates.Any() )
+                {
+                    // Convert individual ExceptionDates into date ranges
+                    var dates = calEvent.ExceptionDates[0].Select( a => a.StartTime ).OrderBy( a => a ).ToList();
+                    if ( dates.Any() )
+                    {
+                        var previousDate = dates[0].AddDays( -1 );
+                        var rangeStart = dates[0];
+                        
+                        foreach ( var date in dates )
+                        {
+                            if ( !date.Equals( previousDate.AddDays( 1 ) ) )
+                            {
+                                // End of a range, start a new one
+                                ranges.Add( new ExclusionRangeOverride
+                                {
+                                    StartDate = rangeStart.Date,
+                                    EndDate = previousDate.Date
+                                } );
+                                rangeStart = date;
+                            }
+                            previousDate = date;
+                        }
+
+                        // Add the last range
+                        ranges.Add( new ExclusionRangeOverride
+                        {
+                            StartDate = rangeStart.Date,
+                            EndDate = dates.Last().Date
+                        } );
+                    }
+                }
+            }
+            catch ( Exception ex )
+            {
+                ExceptionLogService.LogException( ex );
+            }
+
+            return ranges;
+        }
+
+        /// <summary>
+        /// Gets a summary string of what fields are overridden.
+        /// </summary>
+        /// <param name="overrideItem">The override item.</param>
+        /// <returns>A summary string.</returns>
+        private string GetOverrideSummary( ExclusionRangeOverride overrideItem )
+        {
+            var summaries = new List<string>();
+
+            if ( overrideItem.EventContactPersonAliasId.HasValue || !string.IsNullOrWhiteSpace( overrideItem.EventContactPhone ) || !string.IsNullOrWhiteSpace( overrideItem.EventContactEmail ) )
+            {
+                summaries.Add( "Event Contact" );
+            }
+
+            if ( overrideItem.AdministrativeContactPersonAliasId.HasValue || !string.IsNullOrWhiteSpace( overrideItem.AdministrativeContactPhone ) || !string.IsNullOrWhiteSpace( overrideItem.AdministrativeContactEmail ) )
+            {
+                summaries.Add( "Admin Contact" );
+            }
+
+            if ( overrideItem.CampusIdOverride.HasValue )
+            {
+                summaries.Add( "Campus" );
+            }
+
+            if ( overrideItem.SetupTimeOverride.HasValue || overrideItem.CleanupTimeOverride.HasValue )
+            {
+                summaries.Add( "Times" );
+            }
+
+            if ( overrideItem.NumberAttendingOverride.HasValue )
+            {
+                summaries.Add( "Attending" );
+            }
+
+            if ( !string.IsNullOrWhiteSpace( overrideItem.NoteOverride ) )
+            {
+                summaries.Add( "Note" );
+            }
+
+            if ( overrideItem.LocationOverrides.Any() )
+            {
+                summaries.Add( "Locations" );
+            }
+
+            if ( overrideItem.ResourceOverrides.Any() )
+            {
+                summaries.Add( "Resources" );
+            }
+
+            return summaries.Any() ? string.Join( ", ", summaries ) : "<span class='text-muted'>No overrides</span>";
+        }
+
+        /// <summary>
+        /// Loads the exclusion range override modal with data.
+        /// </summary>
+        /// <param name="overrideItem">The override item to load.</param>
+        /// <param name="index">The index of the override item.</param>
+        private void LoadExclusionRangeOverrideModal( ExclusionRangeOverride overrideItem, int index )
+        {
+            hfEditingExclusionRangeIndex.Value = index.ToString();
+
+            // Load date range
+            dpExclusionRangeStart.SelectedDate = overrideItem.StartDate;
+            dpExclusionRangeEnd.SelectedDate = overrideItem.EndDate;
+
+            // Load contact overrides
+            if ( overrideItem.EventContactPersonAliasId.HasValue )
+            {
+                using ( var rockContext = new RockContext() )
+                {
+                    var personAlias = new PersonAliasService( rockContext ).Get( overrideItem.EventContactPersonAliasId.Value );
+                    ppOverrideEventContact.SetValue( personAlias?.Person );
+                }
+            }
+            else
+            {
+                ppOverrideEventContact.SetValue( null );
+            }
+            pnOverrideEventContactPhone.Text = overrideItem.EventContactPhone ?? string.Empty;
+            tbOverrideEventContactEmail.Text = overrideItem.EventContactEmail ?? string.Empty;
+
+            if ( overrideItem.AdministrativeContactPersonAliasId.HasValue )
+            {
+                using ( var rockContext = new RockContext() )
+                {
+                    var personAlias = new PersonAliasService( rockContext ).Get( overrideItem.AdministrativeContactPersonAliasId.Value );
+                    ppOverrideAdministrativeContact.SetValue( personAlias?.Person );
+                }
+            }
+            else
+            {
+                ppOverrideAdministrativeContact.SetValue( null );
+            }
+            pnOverrideAdministrativeContactPhone.Text = overrideItem.AdministrativeContactPhone ?? string.Empty;
+            tbOverrideAdministrativeContactEmail.Text = overrideItem.AdministrativeContactEmail ?? string.Empty;
+
+            // Load other overrides
+            ddlOverrideCampus.SetValue( overrideItem.CampusIdOverride );
+            nbOverrideSetupTime.IntegerValue = overrideItem.SetupTimeOverride;
+            nbOverrideCleanupTime.IntegerValue = overrideItem.CleanupTimeOverride;
+            nbOverrideNumberAttending.IntegerValue = overrideItem.NumberAttendingOverride;
+            tbOverrideNote.Text = overrideItem.NoteOverride ?? string.Empty;
+
+            // Load location and resource overrides
+            LoadOverrideLocationAndResourceControls( overrideItem );
+        }
+
+        /// <summary>
+        /// Loads the location and resource override controls.
+        /// </summary>
+        /// <param name="overrideItem">The override item.</param>
+        private void LoadOverrideLocationAndResourceControls( ExclusionRangeOverride overrideItem )
+        {
+            phOverrideLocations.Controls.Clear();
+            phOverrideResources.Controls.Clear();
+
+            if ( LocationsState == null || ResourcesState == null )
+            {
+                return;
+            }
+
+            // Load locations
+            foreach ( var locationState in LocationsState )
+            {
+                // Get location name - load from service if not already loaded
+                string locationName = string.Empty;
+                if ( locationState.Location != null )
+                {
+                    locationName = locationState.Location.Name;
+                }
+                else if ( locationState.LocationId > 0 )
+                {
+                    using ( var rockContext = new RockContext() )
+                    {
+                        var locationService = new LocationService( rockContext );
+                        var location = locationService.Get( locationState.LocationId );
+                        if ( location != null )
+                        {
+                            locationName = location.Name;
+                        }
+                    }
+                }
+
+                var checkbox = new CheckBox
+                {
+                    ID = "chkLocation_" + locationState.LocationId,
+                    Text = locationName,
+                    CssClass = "margin-r-md"
+                };
+
+                // Check if this location is overridden
+                if ( overrideItem.LocationOverrides.ContainsKey( locationState.LocationId ) )
+                {
+                    checkbox.Checked = overrideItem.LocationOverrides[locationState.LocationId];
+                }
+                else
+                {
+                    // Default to checked (use reservation's location)
+                    checkbox.Checked = true;
+                }
+
+                phOverrideLocations.Controls.Add( checkbox );
+                phOverrideLocations.Controls.Add( new LiteralControl( "<br/>" ) );
+            }
+
+            // Load resources
+            using ( var rockContext = new RockContext() )
+            {
+                var resourceService = new ResourceService( rockContext );
+                foreach ( var resourceState in ResourcesState )
+                {
+                    var resource = resourceService.Get( resourceState.ResourceId );
+                    if ( resource != null )
+                    {
+                        var panel = new Panel { ID = "pnlResource_" + resourceState.ResourceId, CssClass = "margin-b-md" };
+                        
+                        var label = new Label
+                        {
+                            Text = resource.Name + ": ",
+                            CssClass = "control-label"
+                        };
+                        panel.Controls.Add( label );
+
+                        var quantityBox = new NumberBox
+                        {
+                            ID = "nbResourceQuantity_" + resourceState.ResourceId,
+                            NumberType = ValidationDataType.Integer,
+                            MinimumValue = "0",
+                            CssClass = "input-width-sm margin-l-sm"
+                        };
+
+                        // Check if this resource is overridden
+                        if ( overrideItem.ResourceOverrides.ContainsKey( resourceState.ResourceId ) )
+                        {
+                            quantityBox.IntegerValue = overrideItem.ResourceOverrides[resourceState.ResourceId];
+                        }
+                        else
+                        {
+                            quantityBox.IntegerValue = resourceState.Quantity;
+                        }
+
+                        panel.Controls.Add( quantityBox );
+                        phOverrideResources.Controls.Add( panel );
+                    }
+                }
+            }
+        }
 
         #endregion
 

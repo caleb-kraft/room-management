@@ -1,4 +1,4 @@
-﻿// <copyright>
+// <copyright>
 // Copyright by BEMA Software Services
 //
 // Licensed under the Rock Community License (the "License");
@@ -95,12 +95,37 @@ namespace com.bemaservices.RoomManagement.Workflow.Actions.Reservations
 
             var changes = new History.HistoryChangeList();
             var groupService = new GroupService( rockContext );
+            
+            // Load all location attributes upfront to avoid N+1 queries
+            var locationIds = reservation.ReservationLocations.Select( rl => rl.LocationId ).Distinct().ToList();
+            var locations = new LocationService( rockContext ).Queryable()
+                .Where( l => locationIds.Contains( l.Id ) )
+                .ToList();
+            
+            foreach ( var location in locations )
+            {
+                location.LoadAttributes();
+            }
+            
+            var locationAttributesCache = locations.ToDictionary( l => l.Id, l => l.GetAttributeValue( "ApprovalGroup" ).AsGuidOrNull() );
+            
             foreach ( var reservationLocation in reservation.ReservationLocations )
             {
+                if ( reservationLocation.Location == null )
+                {
+                    continue; // Skip if location is null
+                }
+
                 Group approvalGroup = null;
                 var location = reservationLocation.Location;
-                location.LoadAttributes();
-                var approvalGroupGuid = location.GetAttributeValue( "ApprovalGroup" ).AsGuidOrNull();
+                
+                // Use cached attribute value instead of loading in loop
+                Guid? approvalGroupGuid = null;
+                if ( locationAttributesCache.TryGetValue( location.Id, out var cachedGuid ) )
+                {
+                    approvalGroupGuid = cachedGuid;
+                }
+                
                 if ( approvalGroupGuid.HasValue )
                 {
                     approvalGroup = groupService.Get( approvalGroupGuid.Value );
@@ -119,13 +144,14 @@ namespace com.bemaservices.RoomManagement.Workflow.Actions.Reservations
                 }
             }
 
+            // Save reservation changes first to ensure reservation.Id is available for history tracking
+            rockContext.SaveChanges();
+
             if ( changes.Any() )
             {
                 changes.Add( new History.HistoryChange( History.HistoryVerb.Modify, History.HistoryChangeType.Record, string.Format( "Updated by the '{0}' workflow", action.ActionTypeCache.ActivityType.WorkflowType.Name ) ) );
                 HistoryService.SaveChanges( rockContext, typeof( Reservation ), com.bemaservices.RoomManagement.SystemGuid.Category.HISTORY_RESERVATION_CHANGES.AsGuid(), reservation.Id, changes, false );
             }
-
-            rockContext.SaveChanges();
 
             return true;
         }

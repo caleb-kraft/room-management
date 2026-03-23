@@ -24,6 +24,7 @@ using System.Linq;
 using System.Runtime.Serialization;
 using System.Text;
 using System.Web;
+using Newtonsoft.Json;
 using Rock;
 using Rock.Data;
 using Rock.Lava;
@@ -205,6 +206,15 @@ namespace com.bemaservices.RoomManagement.Model
         /// <value>The last occurrence date time.</value>
         [DataMember]
         public DateTime? LastOccurrenceEndDateTime { get; set; }
+
+        /// <summary>
+        /// Gets or sets the exclusion range overrides as JSON.
+        /// This stores field overrides for specific exclusion date ranges in the schedule.
+        /// </summary>
+        /// <value>The exclusion range overrides JSON.</value>
+        [DataMember]
+        [MaxLength( 10000 )]
+        public string ExclusionRangeOverrides { get; set; }
 
         /// <summary>
         /// Gets or sets the initial approver alias identifier.
@@ -739,6 +749,54 @@ namespace com.bemaservices.RoomManagement.Model
         public string GetFriendlyReservationScheduleText()
         {
             return GetFriendlyReservationScheduleText( Schedule, ReservationType, SetupTime, CleanupTime, FirstOccurrenceStartDateTime, LastOccurrenceEndDateTime );
+        }
+
+        /// <summary>
+        /// Gets the exclusion range overrides for this reservation.
+        /// </summary>
+        /// <returns>A list of exclusion range overrides.</returns>
+        public List<ExclusionRangeOverride> GetExclusionRangeOverrides()
+        {
+            if ( string.IsNullOrWhiteSpace( ExclusionRangeOverrides ) )
+            {
+                return new List<ExclusionRangeOverride>();
+            }
+
+            try
+            {
+                return JsonConvert.DeserializeObject<List<ExclusionRangeOverride>>( ExclusionRangeOverrides ) ?? new List<ExclusionRangeOverride>();
+            }
+            catch
+            {
+                return new List<ExclusionRangeOverride>();
+            }
+        }
+
+        /// <summary>
+        /// Sets the exclusion range overrides for this reservation.
+        /// </summary>
+        /// <param name="overrides">The exclusion range overrides.</param>
+        public void SetExclusionRangeOverrides( List<ExclusionRangeOverride> overrides )
+        {
+            if ( overrides == null || !overrides.Any() )
+            {
+                ExclusionRangeOverrides = null;
+            }
+            else
+            {
+                ExclusionRangeOverrides = overrides.ToJson();
+            }
+        }
+
+        /// <summary>
+        /// Gets the exclusion range override for a specific date, if one exists.
+        /// </summary>
+        /// <param name="date">The date to check.</param>
+        /// <returns>The exclusion range override if found; otherwise, null.</returns>
+        public ExclusionRangeOverride GetExclusionRangeOverrideForDate( DateTime date )
+        {
+            var overrides = GetExclusionRangeOverrides();
+            return overrides.FirstOrDefault( o => o.ContainsDate( date ) );
         }
 
         /// <summary>

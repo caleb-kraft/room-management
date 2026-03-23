@@ -1,4 +1,4 @@
-﻿// <copyright>
+// <copyright>
 // Copyright by BEMA Software Services
 //
 // Licensed under the Rock Community License (the "License");
@@ -97,11 +97,18 @@ namespace com.bemaservices.RoomManagement.Workflow.Actions.Reservations
 
             // Get the optional reservation location
             ReservationLocation reservationLocation = null;
-            Guid locationGuid = action.GetWorkflowAttributeValue( GetAttributeValue( action, "LocationAttribute" ).AsGuid() ).AsGuid();
-            Location location = new LocationService( rockContext ).Get( locationGuid );
-            if ( location != null )
+            var locationAttributeGuid = GetAttributeValue( action, "LocationAttribute" ).AsGuidOrNull();
+            if ( locationAttributeGuid.HasValue )
             {
-                reservationLocation = reservation.ReservationLocations.Where( rl => rl.LocationId == location.Id ).FirstOrDefault();
+                var locationGuid = action.GetWorkflowAttributeValue( locationAttributeGuid.Value ).AsGuidOrNull();
+                if ( locationGuid.HasValue && locationGuid.Value != Guid.Empty )
+                {
+                    Location location = new LocationService( rockContext ).Get( locationGuid.Value );
+                    if ( location != null )
+                    {
+                        reservationLocation = reservation.ReservationLocations.Where( rl => rl.LocationId == location.Id ).FirstOrDefault();
+                    }
+                }
             }
 
             var oldValue = reservation.ApprovalState;
@@ -143,13 +150,14 @@ namespace com.bemaservices.RoomManagement.Workflow.Actions.Reservations
                     reservation.ApprovalState.ToString() );
             }
 
+            // Save reservation changes first to ensure reservation.Id and related entities are persisted
+            rockContext.SaveChanges();
+
             if ( changes.Any() )
             {
                 changes.Add( new History.HistoryChange( History.HistoryVerb.Modify, History.HistoryChangeType.Record, string.Format( "Updated by the '{0}' workflow", action.ActionTypeCache.ActivityType.WorkflowType.Name ) ) );
                 HistoryService.SaveChanges( rockContext, typeof( Reservation ), com.bemaservices.RoomManagement.SystemGuid.Category.HISTORY_RESERVATION_CHANGES.AsGuid(), reservation.Id, changes, false );
             }
-
-            rockContext.SaveChanges();
 
             return true;
         }

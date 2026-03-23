@@ -1,4 +1,4 @@
-﻿// <copyright>
+// <copyright>
 // Copyright by BEMA Software Services
 //
 // Licensed under the Rock Community License (the "License");
@@ -18,10 +18,15 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Data.Entity;
 using System.Linq;
 using System.Reflection;
 using Rock;
 using Rock.Data;
+using Rock.Model;
+using com.bemaservices.RoomManagement.Utility.RockInternalMethods;
+using Ical.Net;
+using Ical.Net.CalendarComponents;
 
 namespace com.bemaservices.RoomManagement.Model
 {
@@ -76,7 +81,10 @@ namespace com.bemaservices.RoomManagement.Model
                 filterEndDateTime = filterEndDateTime.Value.AddDays( 1 ).AddMilliseconds( -1 );
             }
 
+            // OPTIMIZATION: Use AsNoTracking() to avoid entity tracking overhead since we're just reading data
+            // Also filter more aggressively using FirstOccurrenceStartDateTime/LastOccurrenceEndDateTime
             var reservations = qry
+                .AsNoTracking()
                 .Where( r => r.FirstOccurrenceStartDateTime == null || r.FirstOccurrenceStartDateTime <= filterEndDateTime )
                 .Where( r => r.LastOccurrenceEndDateTime == null || r.LastOccurrenceEndDateTime >= filterStartDateTime )
                 .Where( r => r.Schedule.iCalendarContent.Contains( "RRULE" ) || r.Schedule.iCalendarContent.Contains( "RDATE" ) ||
@@ -86,17 +94,63 @@ namespace com.bemaservices.RoomManagement.Model
                         )
                         .ToList();
 
-            var reservationsWithDates = reservations
-                .Select( r => new ReservationDate
+            // OPTIMIZATION: Generate occurrences lazily and filter early to avoid processing unnecessary reservations
+            // CRITICAL: For conflict checking, we must generate ALL occurrences that could overlap with the filter range
+            // The filter range represents the new reservation's schedule range, so we must check ALL occurrences in that range
+            var reservationsWithDates = new List<ReservationDate>();
+            foreach ( var reservation in reservations )
+            {
+                // CRITICAL: Always ensure we cover the FULL filter range to catch all conflicts for the new reservation's entire schedule
+                // Start with the filter range as the base (this is what we MUST check)
+                var occurrenceStartDate = filterStartDateTime.Value;
+                var occurrenceEndDate = filterEndDateTime.Value;
+                
+                // OPTIMIZATION: We can expand to include buffer (qryStartDateTime/qryEndDateTime) to catch edge cases,
+                // but only if the reservation's FirstOccurrenceStartDateTime/LastOccurrenceEndDateTime don't restrict us
+                
+                // Expand start date to include buffer if reservation starts before or at filter start
+                if ( !reservation.FirstOccurrenceStartDateTime.HasValue || 
+                     reservation.FirstOccurrenceStartDateTime.Value <= filterStartDateTime.Value )
                 {
-                    Reservation = r,
-                    ReservationDateTimes = r.GetReservationTimes( qryStartDateTime, qryEndDateTime )
-                } )
-                .Where( r => r.ReservationDateTimes.Any() )
-                .ToList();
+                    // Reservation starts before/at filter start - safe to use buffer start
+                    occurrenceStartDate = qryStartDateTime;
+                }
+                // else: Reservation starts after filter start - keep filterStartDateTime to ensure we cover new reservation's occurrences
+                
+                // Expand end date to include buffer if reservation ends after or at filter end
+                if ( !reservation.LastOccurrenceEndDateTime.HasValue || 
+                     reservation.LastOccurrenceEndDateTime.Value >= filterEndDateTime.Value )
+                {
+                    // Reservation ends after/at filter end - safe to use buffer end
+                    occurrenceEndDate = qryEndDateTime;
+                }
+                // else: Reservation ends before filter end - keep filterEndDateTime to ensure we cover new reservation's occurrences
+                
+                // Generate occurrences for this reservation
+                // Note: We're guaranteed to cover at least filterStartDateTime to filterEndDateTime,
+                // which ensures we'll check all occurrences in the new reservation's schedule
+                if ( occurrenceStartDate <= occurrenceEndDate )
+                {
+                    var reservationDateTimes = reservation.GetReservationTimes( occurrenceStartDate, occurrenceEndDate );
+                    if ( reservationDateTimes.Any() )
+                    {
+                        reservationsWithDates.Add( new ReservationDate
+                        {
+                            Reservation = reservation,
+                            ReservationDateTimes = reservationDateTimes
+                        } );
+                    }
+                }
+            }
 
             foreach ( var reservationWithDates in reservationsWithDates )
             {
+                // OPTIMIZATION: Early exit if we've reached maxOccurrences
+                if ( maxOccurrences != null && reservationSummaryList.Count >= maxOccurrences )
+                {
+                    break;
+                }
+
                 var reservation = reservationWithDates.Reservation;
 
                 if ( includeAttributes )
@@ -106,8 +160,31 @@ namespace com.bemaservices.RoomManagement.Model
 
                 foreach ( var reservationDateTime in reservationWithDates.ReservationDateTimes )
                 {
+                    // OPTIMIZATION: Early exit if we've reached maxOccurrences
+                    if ( maxOccurrences != null && reservationSummaryList.Count >= maxOccurrences )
+                    {
+                        break;
+                    }
+
                     var reservationStartDateTime = reservationDateTime.StartDateTime.AddMinutes( -reservation.SetupTime ?? 0 );
                     var reservationEndDateTime = reservationDateTime.EndDateTime.AddMinutes( reservation.CleanupTime ?? 0 );
+
+                    // Check if this is a recurring reservation
+                    var calEvent = InetCalendarHelper.CreateCalendarEvent( reservation.Schedule?.iCalendarContent ?? "" );
+                    var isRecurring = calEvent != null && ( ( calEvent.RecurrenceRules?.Any() == true ) || ( calEvent.RecurrenceDates?.Any() == true ) );
+
+                    // Check if this is an exception occurrence (linked to original via ForeignKey)
+                    var isExceptionOccurrence = !string.IsNullOrWhiteSpace( reservation.ForeignKey ) && 
+                                                reservation.ForeignKey.StartsWith( "OriginalReservation_" );
+                    int? originalReservationId = null;
+                    if ( isExceptionOccurrence )
+                    {
+                        var foreignKeyParts = reservation.ForeignKey.Split( '_' );
+                        if ( foreignKeyParts.Length > 1 && int.TryParse( foreignKeyParts[1], out int originalId ) )
+                        {
+                            originalReservationId = originalId;
+                        }
+                    }
 
                     var validReservationTime = false;
                     if (
@@ -150,38 +227,106 @@ namespace com.bemaservices.RoomManagement.Model
 
                     if ( validReservationTime || validDoorLockTime )
                     {
+                        // Check for exclusion range overrides for this occurrence date
+                        var exclusionOverride = reservation.GetExclusionRangeOverrideForDate( reservationDateTime.StartDateTime );
+                        
+                        // Apply overrides if they exist
+                        var effectiveSetupTime = exclusionOverride?.SetupTimeOverride ?? reservation.SetupTime ?? 0;
+                        var effectiveCleanupTime = exclusionOverride?.CleanupTimeOverride ?? reservation.CleanupTime ?? 0;
+                        var effectiveNumberAttending = exclusionOverride?.NumberAttendingOverride ?? reservation.NumberAttending;
+                        var effectiveNote = exclusionOverride?.NoteOverride ?? reservation.Note;
+                        PersonAlias effectiveEventContactPersonAlias = reservation.EventContactPersonAlias;
+                        if ( exclusionOverride?.EventContactPersonAliasId.HasValue == true )
+                        {
+                            using ( var rockContext = new RockContext() )
+                            {
+                                effectiveEventContactPersonAlias = new PersonAliasService( rockContext ).Get( exclusionOverride.EventContactPersonAliasId.Value );
+                            }
+                        }
+                        var effectiveEventContactEmail = exclusionOverride?.EventContactEmail ?? reservation.EventContactEmail;
+                        var effectiveEventContactPhone = exclusionOverride?.EventContactPhone ?? reservation.EventContactPhone;
+                        PersonAlias effectiveAdministrativeContactPersonAlias = reservation.AdministrativeContactPersonAlias;
+                        if ( exclusionOverride?.AdministrativeContactPersonAliasId.HasValue == true )
+                        {
+                            using ( var rockContext = new RockContext() )
+                            {
+                                effectiveAdministrativeContactPersonAlias = new PersonAliasService( rockContext ).Get( exclusionOverride.AdministrativeContactPersonAliasId.Value );
+                            }
+                        }
+                        var effectiveAdministrativeContactEmail = exclusionOverride?.AdministrativeContactEmail ?? reservation.AdministrativeContactEmail;
+                        var effectiveAdministrativeContactPhone = exclusionOverride?.AdministrativeContactPhone ?? reservation.AdministrativeContactPhone;
+
+                        // Apply location and resource overrides
+                        var effectiveLocations = reservation.ReservationLocations.ToList();
+                        var effectiveResources = reservation.ReservationResources.ToList();
+                        
+                        if ( exclusionOverride != null )
+                        {
+                            // Filter locations based on overrides
+                            if ( exclusionOverride.LocationOverrides.Any() )
+                            {
+                                effectiveLocations = effectiveLocations.Where( l => 
+                                    exclusionOverride.LocationOverrides.ContainsKey( l.LocationId ) && 
+                                    exclusionOverride.LocationOverrides[l.LocationId] 
+                                ).ToList();
+                            }
+
+                            // Override resource quantities
+                            if ( exclusionOverride.ResourceOverrides.Any() )
+                            {
+                                foreach ( var resource in effectiveResources )
+                                {
+                                    if ( exclusionOverride.ResourceOverrides.ContainsKey( resource.ResourceId ) )
+                                    {
+                                        var overrideQuantity = exclusionOverride.ResourceOverrides[resource.ResourceId];
+                                        if ( overrideQuantity.HasValue )
+                                        {
+                                            resource.Quantity = overrideQuantity.Value;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Recalculate reservation times with overridden setup/cleanup times
+                        var effectiveReservationStartDateTime = reservationDateTime.StartDateTime.AddMinutes( -effectiveSetupTime );
+                        var effectiveReservationEndDateTime = reservationDateTime.EndDateTime.AddMinutes( effectiveCleanupTime );
+
                         var reservationSummary = new Model.ReservationSummary
                         {
                             Id = reservation.Id,
                             ReservationType = reservation.ReservationType,
                             ApprovalState = reservation.ApprovalState,
                             ReservationName = reservation.Name,
-                            ReservationLocations = reservation.ReservationLocations.ToList(),
-                            ReservationResources = reservation.ReservationResources.ToList(),
+                            ReservationLocations = effectiveLocations,
+                            ReservationResources = effectiveResources,
                             UnassignedReservationResources = reservation.UnassignedReservationResources.ToList(),
                             ReservationDoorLockTimes = reservationDoorLockTimes,
                             EventStartDateTime = reservationDateTime.StartDateTime,
                             EventEndDateTime = reservationDateTime.EndDateTime,
-                            ReservationStartDateTime = reservationStartDateTime,
-                            ReservationEndDateTime = reservationEndDateTime,
+                            ReservationStartDateTime = effectiveReservationStartDateTime,
+                            ReservationEndDateTime = effectiveReservationEndDateTime,
                             EventDateTimeDescription = GetFriendlyScheduleDescription( reservationDateTime.StartDateTime, reservationDateTime.EndDateTime ),
                             EventTimeDescription = GetFriendlyScheduleDescription( reservationDateTime.StartDateTime, reservationDateTime.EndDateTime, false ),
-                            ReservationDateTimeDescription = GetFriendlyScheduleDescription( reservationDateTime.StartDateTime.AddMinutes( -reservation.SetupTime ?? 0 ), reservationDateTime.EndDateTime.AddMinutes( reservation.CleanupTime ?? 0 ) ),
-                            ReservationTimeDescription = GetFriendlyScheduleDescription( reservationDateTime.StartDateTime.AddMinutes( -reservation.SetupTime ?? 0 ), reservationDateTime.EndDateTime.AddMinutes( reservation.CleanupTime ?? 0 ), false ),
+                            ReservationDateTimeDescription = GetFriendlyScheduleDescription( effectiveReservationStartDateTime, effectiveReservationEndDateTime ),
+                            ReservationTimeDescription = GetFriendlyScheduleDescription( effectiveReservationStartDateTime, effectiveReservationEndDateTime, false ),
                             ReservationMinistry = reservation.ReservationMinistry,
-                            EventContactPersonAlias = reservation.EventContactPersonAlias,
-                            EventContactEmail = reservation.EventContactEmail,
-                            EventContactPhoneNumber = reservation.EventContactPhone,
-                            AdministrativeContactPersonAlias = reservation.AdministrativeContactPersonAlias,
-                            AdministrativeContactEmail = reservation.AdministrativeContactEmail,
-                            AdministrativeContactPhoneNumber = reservation.AdministrativeContactPhone,
+                            EventContactPersonAlias = effectiveEventContactPersonAlias,
+                            EventContactEmail = effectiveEventContactEmail,
+                            EventContactPhoneNumber = effectiveEventContactPhone,
+                            AdministrativeContactPersonAlias = effectiveAdministrativeContactPersonAlias,
+                            AdministrativeContactEmail = effectiveAdministrativeContactEmail,
+                            AdministrativeContactPhoneNumber = effectiveAdministrativeContactPhone,
                             SetupPhotoId = reservation.SetupPhotoId,
                             SetupPhotoGuid = reservation.SetupPhoto?.Guid,
-                            Note = reservation.Note,
+                            Note = effectiveNote,
                             RequesterAlias = reservation.RequesterAlias,
-                            NumberAttending = reservation.NumberAttending,
+                            NumberAttending = effectiveNumberAttending,
                             ModifiedDateTime = reservation.ModifiedDateTime,
-                            ScheduleId = reservation.ScheduleId
+                            ScheduleId = reservation.ScheduleId,
+                            IsRecurring = isRecurring,
+                            IsExceptionOccurrence = isExceptionOccurrence,
+                            OriginalReservationId = originalReservationId
                         };
 
                         if ( includeAttributes )

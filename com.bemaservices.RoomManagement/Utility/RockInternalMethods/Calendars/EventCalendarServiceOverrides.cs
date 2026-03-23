@@ -19,6 +19,9 @@ using Rock;
 namespace com.bemaservices.RoomManagement.Utility.RockInternalMethods
 {
 
+    /// <summary>
+    /// Overrides for Rock's EventCalendarService internal methods.
+    /// </summary>
     public static class EventCalendarServiceOverrides
     {
 
@@ -91,11 +94,6 @@ namespace com.bemaservices.RoomManagement.Utility.RockInternalMethods
             var startTime = new TimeSpan( start.Hour, start.Minute, start.Second );
             if ( startTime.TotalSeconds == 0 && ( iCalEvent.Duration == null || iCalEvent.Duration.TotalSeconds <= 1 ) )
             {
-                iCalEvent.IsAllDay = true;
-            }
-
-            if ( iCalEvent.IsAllDay )
-            {
                 iCalEvent.End = null;
             }
             else
@@ -114,20 +112,42 @@ namespace com.bemaservices.RoomManagement.Utility.RockInternalMethods
         /// <returns>CalDateTime.</returns>
         internal static CalDateTime ConvertToCalDateTime( IDateTime newDateTime, string tzId )
         {
-            if ( newDateTime is CalDateTime cdt )
+            if ( newDateTime == null )
             {
-                if ( tzId != null )
-                {
-                    cdt.TzId = tzId;
-                }
-                return cdt;
+                return null;
             }
 
-            var dateTime = new DateTime( newDateTime.Year, newDateTime.Month, newDateTime.Day, newDateTime.Hour, newDateTime.Minute, newDateTime.Second, newDateTime.Millisecond, DateTimeKind.Local );
+            if ( newDateTime is CalDateTime cdt )
+            {
+                return ConvertToCalDateTime( cdt, tzId );
+            }
 
-            var newDate = ConvertToCalDateTime( dateTime, tzId );
+            var dateTime = new DateTime( newDateTime.Year, newDateTime.Month, newDateTime.Day, newDateTime.Hour, newDateTime.Minute, newDateTime.Second, 0, DateTimeKind.Local );
+            return ConvertToCalDateTime( dateTime, tzId );
+        }
 
-            return newDate;
+        /// <summary>
+        /// Converts to cal date time.
+        /// </summary>
+        /// <param name="newDateTime">The new date time.</param>
+        /// <param name="tzId">The tz identifier.</param>
+        /// <returns>CalDateTime.</returns>
+        internal static CalDateTime ConvertToCalDateTime( CalDateTime newDateTime, string tzId )
+        {
+            if ( newDateTime == null )
+            {
+                return null;
+            }
+
+            // If timezone is the same or null, return as-is
+            if ( tzId == null || tzId == newDateTime.TzId )
+            {
+                return newDateTime;
+            }
+
+            // Create a new CalDateTime with the specified timezone
+            var dateTime = new DateTime( newDateTime.Year, newDateTime.Month, newDateTime.Day, newDateTime.Hour, newDateTime.Minute, newDateTime.Second, 0, DateTimeKind.Local );
+            return ConvertToCalDateTime( dateTime, tzId );
         }
 
         /// <summary>
@@ -144,8 +164,8 @@ namespace com.bemaservices.RoomManagement.Utility.RockInternalMethods
                 newDate.TzId = tzId;
             }
 
-            // Set the HasTime property to ensure that iCal.Net serializes the date value as an iCalendar "DATE" rather than a "PERIOD".
-            // Microsoft Outlook ignores date values that are expressed using the iCalendar "PERIOD" type.
+            // Set the HasTime property to ensure that iCal.Net serializes the date value in the form "TZID={timeZoneId}:YYYYMMDDTHHMMSS".
+            // Microsoft Outlook Web ignores date values that are expressed using the iCalendar "PERIOD" or "DATE" type.
             // (see: MS-STANOICAL - v20210817 - 2.2.86)
             newDate.HasTime = true;
 

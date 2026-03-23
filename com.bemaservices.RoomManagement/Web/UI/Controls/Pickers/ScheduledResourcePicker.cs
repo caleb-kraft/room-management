@@ -163,6 +163,8 @@ namespace com.bemaservices.RoomManagement.Web.UI.Controls
         /// <param name="e">An <see cref="T:System.EventArgs" /> object that contains the event data.</param>
         protected override void OnInit( EventArgs e )
         {
+            // SetExtraRestParams will check cache internally, so it's safe to call here
+            // The cache will prevent expensive recalculation if parameters haven't changed
             SetExtraRestParams();
             this.IconCssClass = "fa fa-cogs";
             base.OnInit( e );
@@ -289,6 +291,22 @@ namespace com.bemaservices.RoomManagement.Web.UI.Controls
         /// </summary>
         public void SetExtraRestParams()
         {
+            // Build a cache key based on all parameters that affect the result
+            // Use control ID to ensure uniqueness if multiple pickers exist on the same page
+            var paramHash = $"{ReservationId}_{ICalendarContent?.GetHashCode() ?? 0}_{SetupTime}_{CleanupTime}_{CampusId}_{LocationIds}_{(_cbShowAllResources?.Checked ?? false)}";
+            var cacheKey = $"RestParams_{this.ID}_{paramHash}";
+            var cachedParams = ViewState[cacheKey] as string;
+            var cachedParamHash = ViewState[$"{cacheKey}_Hash"] as string;
+            
+            // Check if input parameters have changed - if not, use cached result
+            // This prevents expensive recalculation when parameters haven't changed (e.g., on postbacks)
+            if ( !string.IsNullOrWhiteSpace( cachedParams ) && cachedParamHash == paramHash )
+            {
+                // Parameters haven't changed, use cached result
+                ItemRestUrlExtraParams = cachedParams;
+                return;
+            }
+
             StringBuilder additionalParams = new StringBuilder();
             additionalParams.Append( "?getCategorizedItems=true" );
             additionalParams.Append( "&showUnnamedEntityItems=true" );
@@ -309,7 +327,7 @@ namespace com.bemaservices.RoomManagement.Web.UI.Controls
 
                 newReservation = reservationService.SetFirstLastOccurrenceDateTimes( newReservation );
                 var resourceAvailability = reservationService.GetResourceAvailabilities( newReservation,
-                    _cbShowAllResources.Checked, 
+                    _cbShowAllResources?.Checked ?? false, 
                     CampusId ?? 0, 
                     LocationIds.SplitDelimitedValues().AsIntegerList() 
                 );
@@ -345,6 +363,10 @@ namespace com.bemaservices.RoomManagement.Web.UI.Controls
             }
 
             ItemRestUrlExtraParams = additionalParams.ToString();
+            
+            // Cache both the result and the parameter hash for future use
+            ViewState[cacheKey] = ItemRestUrlExtraParams;
+            ViewState[$"{cacheKey}_Hash"] = paramHash;
         }
 
         /// <summary>
