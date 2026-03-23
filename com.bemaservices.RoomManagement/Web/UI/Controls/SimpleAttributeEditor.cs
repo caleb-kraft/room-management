@@ -1,4 +1,4 @@
-﻿// <copyright>
+// <copyright>
 // Copyright by BEMA Software Services
 //
 // Licensed under the Rock Community License (the "License");
@@ -1874,6 +1874,27 @@ namespace com.bemaservices.RoomManagement.Web.UI.Controls
         /// </summary>
         protected void RegisterClientScript()
         {
+            // Only register script if this control is in the Page control tree.
+            // This prevents "control must be in the control tree" errors when controls
+            // are dynamically created (e.g., Matrix field type grids with ReorderField).
+            if ( this.Page == null )
+            {
+                return;
+            }
+
+            // Walk up the control tree to verify we're connected to the Page
+            Control current = this;
+            while ( current != null && current != this.Page )
+            {
+                current = current.Parent;
+            }
+
+            // If we're not connected to the Page, don't register scripts yet
+            if ( current == null )
+            {
+                return;
+            }
+
             string script = @"
     function populateAttributeKey(nameControlId, keyControlId, literalKeyControlId ) {
         // if the attribute key hasn't been filled in yet, populate it with the attribute name minus whitespace
