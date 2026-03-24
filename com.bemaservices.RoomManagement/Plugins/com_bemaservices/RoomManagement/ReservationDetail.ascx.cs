@@ -1,4 +1,4 @@
-﻿// <copyright>
+// <copyright>
 // Copyright by BEMA Software Services
 //
 // Licensed under the Rock Community License (the "License");
@@ -251,6 +251,10 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             {
                 ModifiedDateTime = JsonConvert.DeserializeObject<DateTime?>( json );
             }
+
+            // Recreate dynamic attribute controls during LoadViewState so they can
+            // participate in postback data handling (required by matrix attributes).
+            LoadAdditionalInfo();
         }
 
         /// <summary>
@@ -3493,19 +3497,6 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                         hfReservationLocationGuid.ID = "hfReservationLocationGuid_" + reservationLocation.Guid.ToString();
                         phAttributes.ID = "phAttributes_" + reservationLocation.Guid.ToString();
 
-
-                        if ( isEditMode )
-                        {
-                            var excludeKeys = reservationLocation.Attributes.Where( a => !editableAttributes.Contains( a.Key ) ).Select( a => a.Key ).ToList();
-                            Rock.Attribute.Helper.AddEditControls( reservationLocation, phAttributes, reservationLocation.IsNew, BlockValidationGroup, excludeKeys );
-                            reservationLocation.IsNew = false;
-                        }
-                        else
-                        {
-                            var excludeKeys = reservationLocation.Attributes.Where( a => !viewableAttributes.Contains( a.Key ) ).Select( a => a.Key ).ToList();
-                            Rock.Attribute.Helper.AddDisplayControls( reservationLocation, phAttributes, excludeKeys, showHeading: false );
-                        }
-
                         childControl.Controls.Add( headingTitle );
                         childControl.Controls.Add( hfReservationLocationGuid );
                         childControl.Controls.Add( phAttributes );
@@ -3517,6 +3508,19 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                         else
                         {
                             phViewLocationAnswers.Controls.Add( childControl );
+                        }
+
+
+                        if ( isEditMode )
+                        {
+                            var excludeKeys = reservationLocation.Attributes.Where( a => !editableAttributes.Contains( a.Key ) ).Select( a => a.Key ).ToList();
+                            Rock.Attribute.Helper.AddEditControls( reservationLocation, phAttributes, reservationLocation.IsNew, BlockValidationGroup, excludeKeys );
+                            reservationLocation.IsNew = false;
+                        }
+                        else
+                        {
+                            var excludeKeys = reservationLocation.Attributes.Where( a => !viewableAttributes.Contains( a.Key ) ).Select( a => a.Key ).ToList();
+                            Rock.Attribute.Helper.AddDisplayControls( reservationLocation, phAttributes, excludeKeys, showHeading: false );
                         }
                     }
                 }
@@ -3899,18 +3903,6 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
 
                         phAttributes.ID = "phAttributes_" + reservationResource.Guid.ToString();
 
-                        if ( isEditMode )
-                        {
-                            var excludeKeys = reservationResource.Attributes.Where( a => !editableAttributes.Contains( a.Key ) ).Select( a => a.Key ).ToList();
-                            AddResourceEditControls( reservationResource, phAttributes, reservationResource.IsNew, BlockValidationGroup, excludeKeys );
-                            reservationResource.IsNew = false;
-                        }
-                        else
-                        {
-                            var excludeKeys = reservationResource.Attributes.Where( a => !viewableAttributes.Contains( a.Key ) ).Select( a => a.Key ).ToList();
-                            Rock.Attribute.Helper.AddDisplayControls( reservationResource, phAttributes, excludeKeys, showHeading: false );
-                        }
-
                         childControl.Controls.Add( headingTitle );
                         childControl.Controls.Add( hfReservationResourceGuid );
                         childControl.Controls.Add( phAttributes );
@@ -3922,6 +3914,18 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                         else
                         {
                             phViewResourceAnswers.Controls.Add( childControl );
+                        }
+
+                        if ( isEditMode )
+                        {
+                            var excludeKeys = reservationResource.Attributes.Where( a => !editableAttributes.Contains( a.Key ) ).Select( a => a.Key ).ToList();
+                            AddResourceEditControls( reservationResource, phAttributes, reservationResource.IsNew, BlockValidationGroup, excludeKeys );
+                            reservationResource.IsNew = false;
+                        }
+                        else
+                        {
+                            var excludeKeys = reservationResource.Attributes.Where( a => !viewableAttributes.Contains( a.Key ) ).Select( a => a.Key ).ToList();
+                            Rock.Attribute.Helper.AddDisplayControls( reservationResource, phAttributes, excludeKeys, showHeading: false );
                         }
                     }
                 }

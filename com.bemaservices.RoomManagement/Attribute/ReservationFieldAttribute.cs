@@ -1,4 +1,4 @@
-﻿// <copyright>
+// <copyright>
 // Copyright by BEMA Software Services
 //
 // Licensed under the Rock Community License (the "License");
@@ -16,15 +16,13 @@
 //
 using System;
 
-using Rock.Attribute;
-
 namespace com.bemaservices.RoomManagement.Attribute
 {
     /// <summary>
     /// Field Attribute to select 0 or 1 Reservation
     /// </summary>
     [AttributeUsage( AttributeTargets.Class, AllowMultiple = true, Inherited = true )]
-    public class ReservationFieldAttribute : FieldAttribute
+    public class ReservationFieldAttribute : global::Rock.Attribute.FieldAttribute
     {
         /// <summary>
         /// The include inactive key
@@ -45,7 +43,7 @@ namespace com.bemaservices.RoomManagement.Attribute
         public ReservationFieldAttribute( string name = "Reservation", string description = "", bool required = true, string defaultReservationId = "", string category = "", int order = 0, string key = null, string fieldTypeAssembly = "com.bemaservices.RoomManagement" )
             : base( name, description, required, defaultReservationId, category, order, key, typeof( com.bemaservices.RoomManagement.Field.Types.ReservationFieldType ).FullName, fieldTypeAssembly )
         {
-            var includeInactiveConfigValue = new Rock.Field.ConfigurationValue( "False" );
+            var includeInactiveConfigValue = new global::Rock.Field.ConfigurationValue( "False" );
             FieldConfigurationValues.Add( INCLUDE_INACTIVE_KEY, includeInactiveConfigValue );
         }
 
@@ -64,7 +62,7 @@ namespace com.bemaservices.RoomManagement.Attribute
         public ReservationFieldAttribute( string name = "Reservation", string description = "", bool required = true, string defaultReservationId = "", bool includeInactive = false, string category = "", int order = 0, string key = null, string fieldTypeAssembly = "com.bemaservices.RoomManagement" )
             : base( name, description, required, defaultReservationId, category, order, key, typeof( com.bemaservices.RoomManagement.Field.Types.ReservationFieldType ).FullName )
         {
-            var includeInactiveConfigValue = new Rock.Field.ConfigurationValue( includeInactive.ToString() );
+            var includeInactiveConfigValue = new global::Rock.Field.ConfigurationValue( includeInactive.ToString() );
             FieldConfigurationValues.Add( INCLUDE_INACTIVE_KEY, includeInactiveConfigValue );
         }
 

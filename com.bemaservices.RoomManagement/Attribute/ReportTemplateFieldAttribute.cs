@@ -1,4 +1,4 @@
-﻿// <copyright>
+// <copyright>
 // Copyright by BEMA Software Services
 //
 // Licensed under the Rock Community License (the "License");
@@ -15,8 +15,6 @@
 // </copyright>
 //
 using System;
-using Rock;
-using Rock.Attribute;
 
 namespace com.bemaservices.RoomManagement.Attribute
 {
@@ -24,7 +22,7 @@ namespace com.bemaservices.RoomManagement.Attribute
     /// Field Attribute to select a report template
     /// Stored as ReportTemplate Entity Id int value
     /// </summary>
-    public class ReportTemplateFieldAttribute : FieldAttribute
+    public class ReportTemplateFieldAttribute : global::Rock.Attribute.FieldAttribute
     {
         /// <summary>
         /// Initializes a new instance of the <see cref="ReportTemplateFieldAttribute" /> class.

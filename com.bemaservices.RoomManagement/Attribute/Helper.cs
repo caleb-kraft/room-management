@@ -1,4 +1,4 @@
-﻿// <copyright>
+// <copyright>
 // Copyright by BEMA Software Services
 //
 // Licensed under the Rock Community License (the "License");
@@ -42,7 +42,7 @@ namespace com.bemaservices.RoomManagement.Attribute
             var starterReservationLocation = new ReservationLocation();
             starterReservationLocation.CopyPropertiesFrom( reservationLocation );
 
-            Rock.Attribute.Helper.LoadAttributes( starterReservationLocation );
+            global::Rock.Attribute.Helper.LoadAttributes( starterReservationLocation );
 
             var attributeList = starterReservationLocation.Attributes.Where( kvp => questionAttributeIds.Contains( kvp.Value.Id ) ).ToList();
             reservationLocation.Attributes = new Dictionary<string, Rock.Web.Cache.AttributeCache>();
@@ -66,7 +66,7 @@ namespace com.bemaservices.RoomManagement.Attribute
             var starterReservationResource = new ReservationResource();
             starterReservationResource.CopyPropertiesFrom( reservationResource );
 
-            Rock.Attribute.Helper.LoadAttributes( starterReservationResource );
+            global::Rock.Attribute.Helper.LoadAttributes( starterReservationResource );
 
             var attributeList = starterReservationResource.Attributes.Where( kvp => questionAttributeIds.Contains( kvp.Value.Id ) ).ToList();
             reservationResource.Attributes = new Dictionary<string, Rock.Web.Cache.AttributeCache>();
