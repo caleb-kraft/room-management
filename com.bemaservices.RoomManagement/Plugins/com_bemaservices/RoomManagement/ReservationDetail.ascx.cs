@@ -57,10 +57,16 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
         Order = 0,
         Key = "WorkflowEntryPage",
         DefaultValue = Rock.SystemGuid.Page.WORKFLOW_ENTRY )]
+    [LinkedPage(
+        "Registration Detail Page",
+        Description = "Page used to create or edit a registration instance.",
+        Order = 1,
+        Key = "RegistrationDetailPage",
+        IsRequired = false )]
     [LavaField(
         "Location Detail Template",
         Description = "A customizable template to dictate what details are displayed when selecting a location",
-        Order = 1,
+        Order = 2,
         Key = "LocationDetailTemplate",
         DefaultValue = @"<div class='row'>
     {% if Location.ImageId != null %}
@@ -85,7 +91,7 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
         "Is Additional Info Expanded By Default"
         , Key = "IsAdditionalInfoExpanded"
         , DefaultBooleanValue = false
-        , Order = 2 )]
+        , Order = 3 )]
 
     public partial class ReservationDetail : Rock.Web.UI.RockBlock
     {
@@ -184,6 +190,10 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
 
         private List<ReservationDoorLockSchedule> DoorLockSchedulesState { get; set; }
 
+        private List<LinkedRegistrationSummary> LinkedRegistrationsState { get; set; }
+
+        private bool HasLinkedRegistrationsTable { get; set; }
+
         /// <summary>
         /// Gets or sets the modified date time.
         /// </summary>
@@ -231,6 +241,19 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             {
                 DoorLockSchedulesState = JsonConvert.DeserializeObject<List<ReservationDoorLockSchedule>>( json );
             }
+
+            json = ViewState["LinkedRegistrationsState"] as string;
+            if ( string.IsNullOrWhiteSpace( json ) )
+            {
+                LinkedRegistrationsState = new List<LinkedRegistrationSummary>();
+            }
+            else
+            {
+                LinkedRegistrationsState = JsonConvert.DeserializeObject<List<LinkedRegistrationSummary>>( json );
+            }
+
+            json = ViewState["HasLinkedRegistrationsTable"] as string;
+            HasLinkedRegistrationsTable = json.IsNotNullOrWhiteSpace() && json.AsBoolean();
 
             json = ViewState["ReservationType"] as string;
             if ( string.IsNullOrWhiteSpace( json ) )
@@ -286,6 +309,9 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             gViewLocations.DataKeyNames = new string[] { "Guid" };
             gViewResources.DataKeyNames = new string[] { "Guid" };
             gViewDoorLockSchedules.DataKeyNames = new string[] { "Guid" };
+            gRegistrations.DataKeyNames = new[] { "RegistrationInstanceId" };
+            gRegistrations.GridRebind += gRegistrations_GridRebind;
+            gViewRegistrations.DataKeyNames = new[] { "RegistrationInstanceId" };
 
             rptWorkflows.ItemCommand += rptWorkflows_ItemCommand;
 
@@ -332,6 +358,8 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             ViewState["ResourcesState"] = JsonConvert.SerializeObject( ResourcesState, typeof( List<ReservationResourceSummary> ), Formatting.None, jsonSetting );
             ViewState["LocationsState"] = JsonConvert.SerializeObject( LocationsState, Formatting.None, jsonSetting );
             ViewState["DoorLockSchedulesState"] = JsonConvert.SerializeObject( DoorLockSchedulesState, Formatting.None, jsonSetting );
+            ViewState["LinkedRegistrationsState"] = JsonConvert.SerializeObject( LinkedRegistrationsState, Formatting.None, jsonSetting );
+            ViewState["HasLinkedRegistrationsTable"] = JsonConvert.SerializeObject( HasLinkedRegistrationsTable, Formatting.None, jsonSetting );
             ViewState["ModifiedDateTime"] = JsonConvert.SerializeObject( ModifiedDateTime, Formatting.None, jsonSetting );
 
             return base.SaveViewState();
@@ -763,6 +791,7 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                     }
 
                     reservation.SaveAttributeValues( rockContext );
+                    SaveLinkedRegistrations( reservation.Id, rockContext );
 
                     saveSuccess = true;
                 } );
@@ -991,6 +1020,18 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
 
                 DoorLockSchedulesState.Add( rdls );
             }
+
+            LinkedRegistrationsState = GetLinkedRegistrations( id, new RockContext() )
+                .Select( l => new LinkedRegistrationSummary
+                {
+                    RegistrationInstanceId = l.RegistrationInstanceId,
+                    RegistrationInstanceName = l.RegistrationInstanceName,
+                    RegistrationTemplateId = l.RegistrationTemplateId,
+                    RegistrationTemplateName = l.RegistrationTemplateName,
+                    RegistrationOpenDateTime = l.RegistrationOpenDateTime,
+                    RegistrationCloseDateTime = l.RegistrationCloseDateTime
+                } )
+                .ToList();
 
             btnCopy.Visible = false;
             btnDelete.Visible = false;
@@ -2391,6 +2432,16 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                 DoorLockSchedulesState.Add( rdls );
             }
 
+            HasLinkedRegistrationsTable = LinkedRegistrationsTableExists( rockContext );
+            if ( reservation.Id > 0 && HasLinkedRegistrationsTable )
+            {
+                LinkedRegistrationsState = GetLinkedRegistrations( reservation.Id, rockContext );
+            }
+            else
+            {
+                LinkedRegistrationsState = new List<LinkedRegistrationSummary>();
+            }
+
             reservation.LoadAttributes( rockContext );
 
             bool readOnly = true;
@@ -2551,6 +2602,10 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             gViewResources.SetLinqDataSource( ResourcesState.AsQueryable().OrderBy( r => r.LocationName ).ThenBy( r => r.Resource.Name ) );
             gViewResources.DataBind();
 
+            divViewRegistrations.Visible = ReservationType.DisplayReservationRegistrations && HasLinkedRegistrationsTable && LinkedRegistrationsState.Any();
+            gViewRegistrations.SetLinqDataSource( LinkedRegistrationsState.AsQueryable().OrderBy( r => r.RegistrationInstanceName ) );
+            gViewRegistrations.DataBind();
+
             Hydrate( DoorLockSchedulesState, new RockContext() );
             divViewDoorLockSchedules.Visible = ReservationType.DisplayReservationDoorLockSchedules && DoorLockSchedulesState.Any();
             gViewDoorLockSchedules.EntityTypeId = EntityTypeCache.Get<com.bemaservices.RoomManagement.Model.ReservationDoorLockSchedule>().Id;
@@ -2636,6 +2691,13 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                 if ( ResourcesState.Any() )
                 {
                     wpResources.Expanded = true;
+                }
+
+                LoadAvailableRegistrationInstances();
+                BindReservationRegistrationsGrid();
+                if ( LinkedRegistrationsState.Any() )
+                {
+                    wpRegistrations.Expanded = true;
                 }
 
                 BindReservationDoorLockSchedulesGrid();                
@@ -2814,6 +2876,9 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
 
             wpLocations.Visible = !( ReservationType.LocationRequirement == ReservationTypeRequirement.Hide && !LocationsState.Any() );
             wpResources.Visible = !( ReservationType.ResourceRequirement == ReservationTypeRequirement.Hide && !ResourcesState.Any() );
+            wpRegistrations.Visible = ReservationType.DisplayReservationRegistrations && HasLinkedRegistrationsTable;
+            nbRegistrationsTableMissing.Visible = !HasLinkedRegistrationsTable;
+            nbRegistrationsTableMissing.Text = "Linked registrations are unavailable until the migration that creates the reservation/registration link table has been applied.";
 
             wpDoorLockSchedules.Visible = ReservationType.DisplayReservationDoorLockSchedules;
             nbReservationDoorLockScheduleInstructions.Text = ReservationType.DoorLockInstructions;
@@ -4330,6 +4395,509 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
 
         #endregion
 
+        #region Registration Link Methods
+
+        protected void btnAddLinkedRegistration_Click( object sender, EventArgs e )
+        {
+            LinkSelectedRegistrationInstance();
+        }
+
+        protected void ddlRegistrationInstance_SelectedIndexChanged( object sender, EventArgs e )
+        {
+            LinkSelectedRegistrationInstance();
+        }
+
+        private void LinkSelectedRegistrationInstance()
+        {
+            var registrationInstanceId = ddlRegistrationInstance.SelectedValueAsInt();
+            if ( !registrationInstanceId.HasValue )
+            {
+                return;
+            }
+
+            using ( var rockContext = new RockContext() )
+            {
+                var registrationInstance = new RegistrationInstanceService( rockContext )
+                    .Queryable()
+                    .AsNoTracking()
+                    .Include( ri => ri.RegistrationTemplate )
+                    .FirstOrDefault( ri => ri.Id == registrationInstanceId.Value );
+
+                if ( registrationInstance == null )
+                {
+                    return;
+                }
+
+                if ( LinkedRegistrationsState.All( r => r.RegistrationInstanceId != registrationInstance.Id ) )
+                {
+                    LinkedRegistrationsState.Add( new LinkedRegistrationSummary
+                    {
+                        RegistrationInstanceId = registrationInstance.Id,
+                        RegistrationInstanceName = registrationInstance.Name,
+                        RegistrationTemplateId = registrationInstance.RegistrationTemplateId,
+                        RegistrationTemplateName = registrationInstance.RegistrationTemplate?.Name ?? string.Empty,
+                        RegistrationOpenDateTime = registrationInstance.StartDateTime,
+                        RegistrationCloseDateTime = registrationInstance.EndDateTime
+                    } );
+                }
+            }
+
+            LoadAvailableRegistrationInstances();
+            BindReservationRegistrationsGrid();
+            wpRegistrations.Expanded = true;
+        }
+
+        protected void btnCreateRegistrationInstance_Click( object sender, EventArgs e )
+        {
+            ShowRegistrationInstanceEditorDialog( null );
+        }
+
+        protected void gRegistrations_Edit( object sender, RowEventArgs e )
+        {
+            if ( e.RowKeyValue == null )
+            {
+                return;
+            }
+
+            ShowRegistrationInstanceEditorDialog( e.RowKeyValue.ToString().AsInteger() );
+        }
+
+        protected void ddlRegistrationTemplateModal_SelectedIndexChanged( object sender, EventArgs e )
+        {
+            LoadRegistrationInstanceEditorFromTemplate();
+            hfActiveDialog.Value = "dlgRegistrationInstanceEditor";
+            dlgRegistrationInstanceEditor.Show();
+        }
+
+        protected void dlgRegistrationInstanceEditor_SaveClick( object sender, EventArgs e )
+        {
+            if ( !Page.IsValid )
+            {
+                hfActiveDialog.Value = "dlgRegistrationInstanceEditor";
+                dlgRegistrationInstanceEditor.Show();
+                return;
+            }
+
+            var selectedTemplateId = ddlRegistrationTemplateModal.SelectedValueAsInt();
+            if ( !selectedTemplateId.HasValue )
+            {
+                nbError.Visible = true;
+                nbError.Text = "Please select a registration template.";
+                hfActiveDialog.Value = "dlgRegistrationInstanceEditor";
+                dlgRegistrationInstanceEditor.Show();
+                return;
+            }
+
+            var editRegistrationInstanceId = hfEditRegistrationInstanceId.Value.AsInteger();
+
+            using ( var rockContext = new RockContext() )
+            {
+                var registrationInstanceService = new RegistrationInstanceService( rockContext );
+                var registrationTemplate = new RegistrationTemplateService( rockContext ).Get( selectedTemplateId.Value );
+                if ( registrationTemplate == null || !registrationTemplate.IsAuthorized( Authorization.VIEW, CurrentPerson ) )
+                {
+                    nbError.Visible = true;
+                    nbError.Text = "You are not authorized to use that registration template.";
+                    hfActiveDialog.Value = "dlgRegistrationInstanceEditor";
+                    dlgRegistrationInstanceEditor.Show();
+                    return;
+                }
+
+                RegistrationInstance registrationInstance;
+
+                if ( editRegistrationInstanceId > 0 )
+                {
+                    registrationInstance = registrationInstanceService
+                        .Queryable()
+                        .Include( ri => ri.RegistrationTemplate )
+                        .FirstOrDefault( ri => ri.Id == editRegistrationInstanceId );
+
+                    if ( registrationInstance == null )
+                    {
+                        nbError.Visible = true;
+                        nbError.Text = "Unable to load that registration instance.";
+                        return;
+                    }
+
+                    if ( !registrationInstance.IsAuthorized( Authorization.EDIT, CurrentPerson ) )
+                    {
+                        nbError.Visible = true;
+                        nbError.Text = "You are not authorized to edit that registration instance.";
+                        hfActiveDialog.Value = "dlgRegistrationInstanceEditor";
+                        dlgRegistrationInstanceEditor.Show();
+                        return;
+                    }
+                }
+                else
+                {
+                    registrationInstance = new RegistrationInstance
+                    {
+                        IsActive = true
+                    };
+                }
+
+                registrationInstance.RegistrationTemplateId = selectedTemplateId.Value;
+                rieRegistrationInstance.GetValue( registrationInstance );
+
+                if ( registrationInstance.Id == 0 )
+                {
+                    registrationInstanceService.Add( registrationInstance );
+                }
+
+                rockContext.SaveChanges();
+
+                var refreshedRegistrationInstance = new RegistrationInstanceService( rockContext )
+                    .Queryable()
+                    .AsNoTracking()
+                    .Include( ri => ri.RegistrationTemplate )
+                    .FirstOrDefault( ri => ri.Id == registrationInstance.Id );
+
+                if ( refreshedRegistrationInstance != null )
+                {
+                    LinkedRegistrationsState.RemoveAll( r => r.RegistrationInstanceId == refreshedRegistrationInstance.Id );
+                    LinkedRegistrationsState.Add( ToLinkedRegistrationSummary( refreshedRegistrationInstance ) );
+                }
+            }
+
+            LoadAvailableRegistrationInstances();
+            BindReservationRegistrationsGrid();
+
+            wpRegistrations.Expanded = true;
+            dlgRegistrationInstanceEditor.Hide();
+            hfActiveDialog.Value = string.Empty;
+        }
+
+        protected void gRegistrations_Delete( object sender, RowEventArgs e )
+        {
+            if ( e.RowKeyValue == null )
+            {
+                return;
+            }
+
+            var registrationInstanceId = e.RowKeyValue.ToString().AsInteger();
+            if ( registrationInstanceId <= 0 )
+            {
+                return;
+            }
+
+            hfPendingRegistrationInstanceId.Value = registrationInstanceId.ToString();
+            dlgRegistrationDeleteChoice.SaveButtonText = "Unlink";
+            dlgRegistrationDeleteChoice.Show();
+        }
+
+        protected void dlgRegistrationDeleteChoice_SaveClick( object sender, EventArgs e )
+        {
+            UnlinkPendingRegistrationInstance();
+        }
+
+        private void gRegistrations_GridRebind( object sender, EventArgs e )
+        {
+            BindReservationRegistrationsGrid();
+        }
+
+        private void UnlinkPendingRegistrationInstance()
+        {
+            var registrationInstanceId = hfPendingRegistrationInstanceId.Value.AsInteger();
+            if ( registrationInstanceId <= 0 )
+            {
+                return;
+            }
+
+            LinkedRegistrationsState.RemoveAll( r => r.RegistrationInstanceId == registrationInstanceId );
+            hfPendingRegistrationInstanceId.Value = string.Empty;
+
+            LoadAvailableRegistrationInstances();
+            BindReservationRegistrationsGrid();
+            wpRegistrations.Expanded = true;
+            dlgRegistrationDeleteChoice.Hide();
+        }
+
+        private void ShowRegistrationInstanceEditorDialog( int? registrationInstanceId )
+        {
+            if ( !HasLinkedRegistrationsTable )
+            {
+                nbRegistrationsTableMissing.Visible = true;
+                return;
+            }
+
+            nbError.Visible = false;
+
+            using ( var rockContext = new RockContext() )
+            {
+                RegistrationInstance registrationInstance = null;
+                var isEdit = registrationInstanceId.HasValue && registrationInstanceId.Value > 0;
+
+                if ( isEdit )
+                {
+                    registrationInstance = new RegistrationInstanceService( rockContext )
+                        .Queryable()
+                        .AsNoTracking()
+                        .Include( ri => ri.RegistrationTemplate )
+                        .FirstOrDefault( ri => ri.Id == registrationInstanceId.Value );
+
+                    if ( registrationInstance == null )
+                    {
+                        nbError.Visible = true;
+                        nbError.Text = "Unable to load that registration instance.";
+                        return;
+                    }
+                }
+
+                LoadRegistrationTemplateOptions( registrationInstance?.RegistrationTemplateId, rockContext );
+
+                hfEditRegistrationInstanceId.Value = registrationInstance?.Id.ToString() ?? string.Empty;
+                ddlRegistrationTemplateModal.Enabled = !isEdit;
+                dlgRegistrationInstanceEditor.Title = isEdit ? "Edit Registration Instance" : "Create Registration Instance";
+
+                if ( isEdit )
+                {
+                    rieRegistrationInstance.SetValue( registrationInstance );
+                }
+                else
+                {
+                    LoadRegistrationInstanceEditorFromTemplate( rockContext );
+                }
+            }
+
+            hfActiveDialog.Value = "dlgRegistrationInstanceEditor";
+            dlgRegistrationInstanceEditor.Show();
+        }
+
+        private void LoadRegistrationTemplateOptions( int? selectedTemplateId, RockContext rockContext )
+        {
+            ddlRegistrationTemplateModal.Items.Clear();
+            ddlRegistrationTemplateModal.Items.Add( new ListItem( string.Empty, string.Empty ) );
+
+            var registrationTemplates = new RegistrationTemplateService( rockContext )
+                .Queryable()
+                .AsNoTracking()
+                .OrderBy( rt => rt.Name )
+                .ToList()
+                .Where( rt => rt.IsAuthorized( Authorization.VIEW, CurrentPerson ) )
+                .ToList();
+
+            foreach ( var registrationTemplate in registrationTemplates )
+            {
+                ddlRegistrationTemplateModal.Items.Add( new ListItem( registrationTemplate.Name, registrationTemplate.Id.ToString() ) );
+            }
+
+            if ( selectedTemplateId.HasValue )
+            {
+                ddlRegistrationTemplateModal.SetValue( selectedTemplateId.Value );
+            }
+            else if ( ddlRegistrationTemplateModal.Items.Count == 2 )
+            {
+                ddlRegistrationTemplateModal.SelectedIndex = 1;
+            }
+        }
+
+        private void LoadRegistrationInstanceEditorFromTemplate( RockContext rockContext = null )
+        {
+            var selectedTemplateId = ddlRegistrationTemplateModal.SelectedValueAsInt();
+            if ( !selectedTemplateId.HasValue )
+            {
+                rieRegistrationInstance.SetValue( null );
+                return;
+            }
+
+            var registrationInstance = GetRegistrationInstanceFromTemplate( selectedTemplateId.Value, rockContext );
+
+            rieRegistrationInstance.SetValue( registrationInstance );
+        }
+
+        private RegistrationInstance GetRegistrationInstanceFromTemplate( int registrationTemplateId, RockContext rockContext = null )
+        {
+            var useOwnContext = rockContext == null;
+            rockContext = rockContext ?? new RockContext();
+
+            var registrationTemplate = new RegistrationTemplateService( rockContext ).Get( registrationTemplateId );
+            if ( registrationTemplate == null )
+            {
+                if ( useOwnContext )
+                {
+                    rockContext.Dispose();
+                }
+
+                return null;
+            }
+
+            var registrationInstance = new RegistrationInstance
+            {
+                IsActive = true,
+                RegistrationTemplateId = registrationTemplate.Id,
+                RegistrationTemplate = new RegistrationTemplate()
+            };
+
+            registrationInstance.RegistrationTemplate.CopyPropertiesFrom( registrationTemplate );
+
+            if ( useOwnContext )
+            {
+                rockContext.Dispose();
+            }
+
+            return registrationInstance;
+        }
+
+        private void BindReservationRegistrationsGrid()
+        {
+            gRegistrations.SetLinqDataSource( LinkedRegistrationsState.AsQueryable().OrderBy( r => r.RegistrationInstanceName ) );
+            gRegistrations.DataBind();
+        }
+
+        private void LoadAvailableRegistrationInstances()
+        {
+            ddlRegistrationInstance.Items.Clear();
+            ddlRegistrationInstance.Items.Add( new ListItem( string.Empty, string.Empty ) );
+
+            using ( var rockContext = new RockContext() )
+            {
+                var linkedRegistrationIds = LinkedRegistrationsState.Select( r => r.RegistrationInstanceId ).Distinct().ToList();
+
+                var availableRegistrations = new RegistrationInstanceService( rockContext )
+                    .Queryable()
+                    .AsNoTracking()
+                    .Include( ri => ri.RegistrationTemplate )
+                    .Where( ri => !linkedRegistrationIds.Contains( ri.Id ) )
+                    .OrderBy( ri => ri.Name )
+                    .Take( 500 )
+                    .Select( ri => new
+                    {
+                        ri.Id,
+                        ri.Name,
+                        RegistrationTemplateName = ri.RegistrationTemplate != null ? ri.RegistrationTemplate.Name : string.Empty
+                    } )
+                    .ToList();
+
+                foreach ( var registration in availableRegistrations )
+                {
+                    var templateSuffix = registration.RegistrationTemplateName.IsNotNullOrWhiteSpace()
+                        ? $" ({registration.RegistrationTemplateName})"
+                        : string.Empty;
+
+                    ddlRegistrationInstance.Items.Add( new ListItem( $"{registration.Name}{templateSuffix}", registration.Id.ToString() ) );
+                }
+            }
+        }
+
+        private LinkedRegistrationSummary ToLinkedRegistrationSummary( RegistrationInstance registrationInstance )
+        {
+            if ( registrationInstance == null )
+            {
+                return null;
+            }
+
+            return new LinkedRegistrationSummary
+            {
+                RegistrationInstanceId = registrationInstance.Id,
+                RegistrationInstanceName = registrationInstance.Name,
+                RegistrationTemplateId = registrationInstance.RegistrationTemplateId,
+                RegistrationTemplateName = registrationInstance.RegistrationTemplate?.Name ?? string.Empty,
+                RegistrationOpenDateTime = registrationInstance.StartDateTime,
+                RegistrationCloseDateTime = registrationInstance.EndDateTime
+            };
+        }
+
+        private void NavigateToRegistrationDetailPage( int registrationInstanceId )
+        {
+            var qryParams = new Dictionary<string, string>
+            {
+                ["RegistrationInstanceId"] = registrationInstanceId.ToString()
+            };
+
+            if ( GetAttributeValue( "RegistrationDetailPage" ).AsGuidOrNull().HasValue )
+            {
+                NavigateToLinkedPage( "RegistrationDetailPage", qryParams );
+                return;
+            }
+
+            var url = ResolveRockUrl( $"~/RegistrationDetail?RegistrationInstanceId={registrationInstanceId}" );
+            Response.Redirect( url, false );
+            Context.ApplicationInstance.CompleteRequest();
+        }
+
+        private bool LinkedRegistrationsTableExists( RockContext rockContext )
+        {
+            if ( rockContext == null )
+            {
+                return false;
+            }
+
+            return rockContext.Database
+                .SqlQuery<int?>( "SELECT OBJECT_ID('[dbo].[_com_bemaservices_RoomManagement_ReservationRegistrationInstanceLink]', 'U')" )
+                .FirstOrDefault()
+                .HasValue;
+        }
+
+        private List<LinkedRegistrationSummary> GetLinkedRegistrations( int reservationId, RockContext rockContext )
+        {
+            if ( reservationId <= 0 || !LinkedRegistrationsTableExists( rockContext ) )
+            {
+                return new List<LinkedRegistrationSummary>();
+            }
+
+            const string sql = @"
+SELECT
+    ri.[Id] AS [RegistrationInstanceId],
+    ri.[Name] AS [RegistrationInstanceName],
+    ri.[RegistrationTemplateId],
+    rt.[Name] AS [RegistrationTemplateName],
+    ri.[StartDateTime] AS [RegistrationOpenDateTime],
+    ri.[EndDateTime] AS [RegistrationCloseDateTime]
+FROM [dbo].[_com_bemaservices_RoomManagement_ReservationRegistrationInstanceLink] l
+INNER JOIN [RegistrationInstance] ri ON ri.[Id] = l.[RegistrationInstanceId]
+LEFT JOIN [RegistrationTemplate] rt ON rt.[Id] = ri.[RegistrationTemplateId]
+WHERE l.[ReservationId] = @p0";
+
+            return rockContext.Database.SqlQuery<LinkedRegistrationSummary>( sql, reservationId ).ToList();
+        }
+
+        private void SaveLinkedRegistrations( int reservationId, RockContext rockContext )
+        {
+            if ( reservationId <= 0 || !LinkedRegistrationsTableExists( rockContext ) || LinkedRegistrationsState == null )
+            {
+                return;
+            }
+
+            rockContext.Database.ExecuteSqlCommand(
+                "DELETE FROM [dbo].[_com_bemaservices_RoomManagement_ReservationRegistrationInstanceLink] WHERE [ReservationId] = @p0",
+                reservationId );
+
+            var createdByAliasId = CurrentPersonAliasId;
+            var linkedRegistrationIds = LinkedRegistrationsState
+                .Select( r => r.RegistrationInstanceId )
+                .Distinct()
+                .ToList();
+
+            foreach ( var registrationInstanceId in linkedRegistrationIds )
+            {
+                rockContext.Database.ExecuteSqlCommand( @"
+INSERT INTO [dbo].[_com_bemaservices_RoomManagement_ReservationRegistrationInstanceLink]
+(
+    [ReservationId],
+    [RegistrationInstanceId],
+    [Guid],
+    [CreatedDateTime],
+    [ModifiedDateTime],
+    [CreatedByPersonAliasId],
+    [ModifiedByPersonAliasId]
+)
+SELECT
+    @p0,
+    @p1,
+    NEWID(),
+    GETDATE(),
+    GETDATE(),
+    @p2,
+    @p2
+WHERE EXISTS ( SELECT 1 FROM [RegistrationInstance] WHERE [Id] = @p1 )",
+                    reservationId,
+                    registrationInstanceId,
+                    createdByAliasId );
+            }
+        }
+
+        #endregion
+
         #region Reservation Door Lock Schedule Methods
 
         private bool SaveReservationDoorLockSchedule()
@@ -4466,6 +5034,21 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             /// </summary>
             /// <value><c>true</c> if this instance is new; otherwise, <c>false</c>.</value>
             public bool IsNew { get; set; }
+        }
+
+        private class LinkedRegistrationSummary
+        {
+            public int RegistrationInstanceId { get; set; }
+
+            public string RegistrationInstanceName { get; set; }
+
+            public int RegistrationTemplateId { get; set; }
+
+            public string RegistrationTemplateName { get; set; }
+
+            public DateTime? RegistrationOpenDateTime { get; set; }
+
+            public DateTime? RegistrationCloseDateTime { get; set; }
         }
         #endregion
     }

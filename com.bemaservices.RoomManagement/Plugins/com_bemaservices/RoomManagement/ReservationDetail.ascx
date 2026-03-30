@@ -1,4 +1,4 @@
-﻿<%@ Control Language="C#" AutoEventWireup="true" CodeFile="ReservationDetail.ascx.cs" Inherits="RockWeb.Plugins.com_bemaservices.RoomManagement.ReservationDetail" %>
+<%@ Control Language="C#" AutoEventWireup="true" CodeFile="ReservationDetail.ascx.cs" Inherits="RockWeb.Plugins.com_bemaservices.RoomManagement.ReservationDetail" %>
 <%@ Register TagPrefix="BEMA" Assembly="com.bemaservices.RoomManagement" Namespace="com.bemaservices.RoomManagement.Web.UI.Controls" %>
 <script type="text/javascript">
     function clearActiveDialog ()
@@ -137,6 +137,21 @@ div[id$="_upnlContent"].modal-open:has(div.picker-menu[style*="display: block"])
                                             </Rock:RockTemplateField>
                                             <Rock:LinkButtonField CssClass="btn btn-sm btn-success" OnClick="gViewResources_ApproveClick" ToolTip="Approve" Text="<i class='fa fa-check'></i>" Visible="true" />
                                             <Rock:LinkButtonField CssClass="btn btn-sm btn-danger" OnClick="gViewResources_DenyClick" ToolTip="Deny" Text="<i class='fa fa-ban'></i>" Visible="true" />
+                                        </Columns>
+                                    </Rock:Grid>
+                                </div>
+                            </div>
+
+                            <div id="divViewRegistrations" runat="server">
+                                <h4>Registrations</h4>
+                                <div class="grid">
+                                    <Rock:Grid ID="gViewRegistrations" runat="server" AllowPaging="false" DisplayType="Light" RowItemText="Registration" ShowWorkflowOrCustomActionButtons="false">
+                                        <Columns>
+                                            <Rock:RockBoundField DataField="RegistrationInstanceName" HeaderText="Registration" />
+                                            <Rock:RockBoundField DataField="RegistrationTemplateName" HeaderText="Template" />
+                                            <Rock:DateTimeField DataField="RegistrationOpenDateTime" HeaderText="Open" />
+                                            <Rock:DateTimeField DataField="RegistrationCloseDateTime" HeaderText="Close" />
+                                            <Rock:EditField OnClick="gRegistrations_Edit" />
                                         </Columns>
                                     </Rock:Grid>
                                 </div>
@@ -306,6 +321,35 @@ div[id$="_upnlContent"].modal-open:has(div.picker-menu[style*="display: block"])
                                 </div>
                             </Rock:PanelWidget>
 
+                            <Rock:PanelWidget ID="wpRegistrations" runat="server" Title="Registrations">
+                                <Rock:NotificationBox ID="nbRegistrationsTableMissing" runat="server" NotificationBoxType="Warning" Visible="false" />
+                                <div class="row">
+                                    <div class="col-md-8">
+                                        <Rock:RockDropDownList ID="ddlRegistrationInstance" runat="server" Label="Link Existing Registration" AutoPostBack="true" OnSelectedIndexChanged="ddlRegistrationInstance_SelectedIndexChanged" EnhanceForLongLists="true" />
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="control-label">&nbsp;</label>
+                                        <div>
+                                            <asp:LinkButton ID="btnCreateRegistrationInstance" runat="server" CssClass="btn btn-default btn-sm" OnClick="btnCreateRegistrationInstance_Click">
+                                                <i class="fa fa-plus"></i> Create New
+                                            </asp:LinkButton>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="grid">
+                                    <Rock:Grid ID="gRegistrations" runat="server" AllowPaging="false" DisplayType="Light" RowItemText="Registration" ShowConfirmDeleteDialog="false" ShowWorkflowOrCustomActionButtons="false">
+                                        <Columns>
+                                            <Rock:RockBoundField DataField="RegistrationInstanceName" HeaderText="Registration" />
+                                            <Rock:RockBoundField DataField="RegistrationTemplateName" HeaderText="Template" />
+                                            <Rock:DateTimeField DataField="RegistrationOpenDateTime" HeaderText="Open" />
+                                            <Rock:DateTimeField DataField="RegistrationCloseDateTime" HeaderText="Close" />
+                                            <Rock:EditField OnClick="gRegistrations_Edit" />
+                                            <Rock:DeleteField OnClick="gRegistrations_Delete" />
+                                        </Columns>
+                                    </Rock:Grid>
+                                </div>
+                            </Rock:PanelWidget>
+
                             <Rock:PanelWidget ID="wpDoorLockSchedules" runat="server" Title="Door Unlock Schedules">
                                 <div class="grid">
                                     <Rock:ModalAlert ID="maDoorLockScheduleGridWarning" runat="server" />
@@ -350,6 +394,7 @@ div[id$="_upnlContent"].modal-open:has(div.picker-menu[style*="display: block"])
         </asp:Panel>
 
         <asp:HiddenField ID="hfActiveDialog" runat="server" />
+        <asp:HiddenField ID="hfPendingRegistrationInstanceId" runat="server" />
 
         <Rock:ModalDialog ID="dlgReservationLocation" runat="server" Title="Select Location" OnSaveThenAddClick="dlgReservationLocation_SaveThenAddClick" OnSaveClick="dlgReservationLocation_SaveClick" OnCancelScript="clearActiveDialog();" ValidationGroup="ReservationLocation">
             <Content>
@@ -429,6 +474,27 @@ div[id$="_upnlContent"].modal-open:has(div.picker-menu[style*="display: block"])
                     <Rock:RockTextBox ID="tbReservationDoorLockScheduleNote" runat="server" Label="Note" Required="false" />
                 </div>
                 
+            </Content>
+        </Rock:ModalDialog>
+
+        <Rock:ModalDialog ID="dlgRegistrationInstanceEditor" runat="server" Title="Registration Instance" OnSaveClick="dlgRegistrationInstanceEditor_SaveClick" OnCancelScript="clearActiveDialog();" ValidationGroup="ReservationRegistrationInstance">
+            <Content>
+                <asp:HiddenField ID="hfEditRegistrationInstanceId" runat="server" />
+                <asp:ValidationSummary ID="valRegistrationInstanceSummary" runat="server" HeaderText="Please Correct the Following" CssClass="alert alert-danger" ValidationGroup="ReservationRegistrationInstance" />
+
+                <div class="row">
+                    <div class="col-md-6">
+                        <Rock:RockDropDownList ID="ddlRegistrationTemplateModal" runat="server" Label="Registration Template" Required="true" ValidationGroup="ReservationRegistrationInstance" AutoPostBack="true" OnSelectedIndexChanged="ddlRegistrationTemplateModal_SelectedIndexChanged" EnhanceForLongLists="true" />
+                    </div>
+                </div>
+
+                <Rock:RegistrationInstanceEditor ID="rieRegistrationInstance" runat="server" ValidationGroup="ReservationRegistrationInstance" ShowRegistrationTypeSection="false" />
+            </Content>
+        </Rock:ModalDialog>
+
+        <Rock:ModalDialog ID="dlgRegistrationDeleteChoice" runat="server" Title="Confirm Unlink" OnSaveClick="dlgRegistrationDeleteChoice_SaveClick" OnCancelScript="clearActiveDialog();">
+            <Content>
+                <Rock:NotificationBox ID="nbRegistrationDeleteChoice" runat="server" NotificationBoxType="Warning" Text="This will unlink the registration from this reservation. The registration instance itself will not be deleted." />
             </Content>
         </Rock:ModalDialog>
     </ContentTemplate>

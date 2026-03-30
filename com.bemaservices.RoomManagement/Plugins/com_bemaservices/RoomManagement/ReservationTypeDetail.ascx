@@ -1,4 +1,4 @@
-﻿<%@ Control Language="C#" AutoEventWireup="true" CodeFile="ReservationTypeDetail.ascx.cs" Inherits="RockWeb.Plugins.com_bemaservices.RoomManagement.ReservationTypeDetail" %>
+<%@ Control Language="C#" AutoEventWireup="true" CodeFile="ReservationTypeDetail.ascx.cs" Inherits="RockWeb.Plugins.com_bemaservices.RoomManagement.ReservationTypeDetail" %>
 
 <script type="text/javascript">
     function clearActiveDialog ()
@@ -65,6 +65,7 @@
                                 <Rock:RockCheckBox ID="cbIsContactDetailsRequired" runat="server" Label="Are Contact Details Required" SourceTypeName="com.bemaservices.RoomManagement.Model.ReservationType, com.bemaservices.RoomManagement" PropertyName="IsContactDetailsRequired" />
                                 <Rock:RockCheckBox ID="cbIsCampusRequired" runat="server" Label="Is Campus Required" SourceTypeName="com.bemaservices.RoomManagement.Model.ReservationType, com.bemaservices.RoomManagement" PropertyName="IsCampusRequired" />
                                 <Rock:RockCheckBox ID="cbIsReservationBookedOnApproval" runat="server" Label="Is Reservation Booked On Approval" Help="Are the resources and locations in this reservation booked once it's created, or only once it's approved?" SourceTypeName="com.bemaservices.RoomManagement.Model.ReservationType, com.bemaservices.RoomManagement" PropertyName="IsReservationBookedOnApproval" />
+                                <Rock:RockCheckBox ID="cbDisplayRegistrations" runat="server" Label="Display Registrations Panel?" SourceTypeName="com.bemaservices.RoomManagement.Model.ReservationType, com.bemaservices.RoomManagement" PropertyName="DisplayReservationRegistrations" />
                                 <Rock:DefinedValuesPicker ID="dvpReservableLocationTypes" runat="server" Label="Reservable Location Types" />
                                 <Rock:RockRadioButtonList ID="rblLocationRequirements" runat="server" RepeatDirection="Horizontal" Label="Do you want to hide, allow, or require locations for new reservations on the Reservation Details page?" />
                                 <Rock:RockRadioButtonList ID="rblResourceRequirements" runat="server" RepeatDirection="Horizontal" Label="Do you want to hide, allow, or require resources for new reservations on the Reservation Details page?" />

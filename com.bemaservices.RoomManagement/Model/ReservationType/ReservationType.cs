@@ -1,4 +1,4 @@
-﻿// <copyright>
+// <copyright>
 // Copyright by BEMA Software Services
 //
 // Licensed under the Rock Community License (the "License");
@@ -166,6 +166,13 @@ namespace com.bemaservices.RoomManagement.Model
         /// <value><c>true</c> if [display reservation door lock schedules]; otherwise, <c>false</c>.</value>
         [DataMember]
         public bool DisplayReservationDoorLockSchedules { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether [display reservation registrations].
+        /// </summary>
+        /// <value><c>true</c> if [display reservation registrations]; otherwise, <c>false</c>.</value>
+        [DataMember]
+        public bool DisplayReservationRegistrations { get; set; }
 
         /// <summary>
         /// Gets or sets the door lock instructions.

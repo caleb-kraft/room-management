@@ -1,4 +1,4 @@
-﻿// <copyright>
+// <copyright>
 // Copyright by BEMA Software Services
 //
 // Licensed under the Rock Community License (the "License");
@@ -224,5 +224,59 @@ namespace com.bemaservices.RoomManagement.Model
         /// </summary>
         /// <value>The attribute values.</value>
         public Dictionary<string, AttributeValueCache> AttributeValues { get; set; }
+
+        /// <summary>
+        /// Gets or sets the linked registration instance identifiers.
+        /// </summary>
+        /// <value>The linked registration instance identifiers.</value>
+        public List<int> LinkedRegistrationInstanceIds { get; set; } = new List<int>();
+
+        /// <summary>
+        /// Gets or sets the linked registration instances.
+        /// </summary>
+        /// <value>The linked registration instances.</value>
+        public List<LinkedRegistrationInstanceSummary> LinkedRegistrationInstances { get; set; } = new List<LinkedRegistrationInstanceSummary>();
+    }
+
+    /// <summary>
+    /// A linked registration instance summary for reservation API responses.
+    /// </summary>
+    public class LinkedRegistrationInstanceSummary
+    {
+        /// <summary>
+        /// Gets or sets the registration instance identifier.
+        /// </summary>
+        /// <value>The registration instance identifier.</value>
+        public int RegistrationInstanceId { get; set; }
+
+        /// <summary>
+        /// Gets or sets the name of the registration instance.
+        /// </summary>
+        /// <value>The name of the registration instance.</value>
+        public string RegistrationInstanceName { get; set; }
+
+        /// <summary>
+        /// Gets or sets the registration template identifier.
+        /// </summary>
+        /// <value>The registration template identifier.</value>
+        public int RegistrationTemplateId { get; set; }
+
+        /// <summary>
+        /// Gets or sets the name of the registration template.
+        /// </summary>
+        /// <value>The name of the registration template.</value>
+        public string RegistrationTemplateName { get; set; }
+
+        /// <summary>
+        /// Gets or sets the registration open date time.
+        /// </summary>
+        /// <value>The registration open date time.</value>
+        public DateTime? RegistrationOpenDateTime { get; set; }
+
+        /// <summary>
+        /// Gets or sets the registration close date time.
+        /// </summary>
+        /// <value>The registration close date time.</value>
+        public DateTime? RegistrationCloseDateTime { get; set; }
     }
 }

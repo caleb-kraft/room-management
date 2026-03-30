@@ -141,6 +141,8 @@
     <Compile Include="Migrations\043_Rollup247.cs" />
     <Compile Include="Migrations\042_ModificationFixes.cs" />
     <Compile Include="Migrations\041_RoomDetails.cs" />
+    <Compile Include="Migrations\049_LinkedRegistrationApiSetup.cs" />
+    <Compile Include="Migrations\050_ReservationTypeRegistrationPanelToggle.cs" />
     <Compile Include="Migrations\048_LavaReportV2.cs" />
     <Compile Include="Migrations\047_OrphanedApprovalProcessHandling.cs" />
     <Compile Include="Migrations\046_DoorLocks.cs" />
@@ -269,7 +271,7 @@
       <Project>{61dece2b-0434-435e-8d65-49a4fdf98365}</Project>
       <Name>Rock.Enums</Name>
     </ProjectReference>
-    <ProjectReference Include="..\..\..\RockRMS\Rock.Lava\Rock.Lava.csproj">
+    <ProjectReference Include="..\..\RockRMS\Rock.Lava\Rock.Lava.csproj">
       <Project>{37E293DD-F282-4A34-91FA-5FB8503D5672}</Project>
       <Name>Rock.Lava</Name>
     </ProjectReference>

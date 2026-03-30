@@ -1,4 +1,4 @@
-﻿// <copyright>
+// <copyright>
 // Copyright by BEMA Software Services
 //
 // Licensed under the Rock Community License (the "License");
@@ -417,6 +417,7 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
                 reservationType.IsNumberAttendingRequired = cbIsNumberAttendingRequired.Checked;
                 reservationType.IsSetupTimeRequired = cbIsSetupTimeRequired.Checked;
                 reservationType.DisplayReservationDoorLockSchedules = cbDisplayDoorLock.Checked;
+                reservationType.DisplayReservationRegistrations = cbDisplayRegistrations.Checked;
                 reservationType.DefaultSetupTime = nbDefaultSetupTime.Text.AsIntegerOrNull();
                 reservationType.DefaultCleanupTime = nbDefaultCleanupTime.Text.AsIntegerOrNull();
                 reservationType.IsReservationBookedOnApproval = cbIsReservationBookedOnApproval.Checked;
@@ -1380,6 +1381,7 @@ namespace RockWeb.Plugins.com_bemaservices.RoomManagement
             cbIsNumberAttendingRequired.Checked = reservationType.IsNumberAttendingRequired;
             cbIsSetupTimeRequired.Checked = reservationType.IsSetupTimeRequired;
             cbDisplayDoorLock.Checked = reservationType.DisplayReservationDoorLockSchedules;
+            cbDisplayRegistrations.Checked = reservationType.DisplayReservationRegistrations;
             nbDefaultSetupTime.Text = reservationType.DefaultSetupTime.ToStringSafe();
             nbDefaultCleanupTime.Text = reservationType.DefaultCleanupTime.ToStringSafe();
             nbDefaultEndDate.Text = reservationType.DefaultReservationDuration.ToStringSafe();
